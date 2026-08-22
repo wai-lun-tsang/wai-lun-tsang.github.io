@@ -136,16 +136,17 @@ function avatarSrc(c){
 function avatarHtml(c, sizeClass){
   const src = avatarSrc(c);
   if(src) return `<div class="${sizeClass}" style="overflow:hidden;padding:0;"><img src="${src}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;"></div>`;
-  return `<div class="${sizeClass}">${initials(c.name)}</div>`;
+  return `<div class="${sizeClass}">${contactInitials(c)}</div>`;
 }
 
 /* ---------- contact model helpers ---------- */
 function blankContact(){
   return {
-    id: uid(), name:"", phone:"", email:"", metContext:"",
+    id: uid(), firstName:"", lastName:"", phone:"", email:"", headline:"",
     groupIds:[], alignmentTierId:"", socialLinks:[], keyDates:[], photo:null
   };
 }
+function fullName(c){ return [c.firstName, c.lastName].filter(Boolean).join(" ").trim(); }
 function tierById(id){ return ALIGNMENT_TIERS.find(t=>t.id===id); }
 function tagById(id){ return TAGS.find(t=>t.id===id); }
 function groupById(id){ return GROUPS.find(g=>g.id===id); }
@@ -205,10 +206,10 @@ let listGroupFilter = "";
 let listSearch = "";
 
 async function renderList(){
-  CONTACTS = (await idbGetAll("contacts")).sort((a,b)=> a.name.localeCompare(b.name));
+  CONTACTS = (await idbGetAll("contacts")).sort((a,b)=> fullName(a).localeCompare(fullName(b)));
   const filtered = CONTACTS.filter(c=>{
     if(listGroupFilter && !(c.groupIds||[]).includes(listGroupFilter)) return false;
-    if(listSearch && !c.name.toLowerCase().includes(listSearch.toLowerCase())) return false;
+    if(listSearch && !fullName(c).toLowerCase().includes(listSearch.toLowerCase())) return false;
     return true;
   });
 
@@ -227,10 +228,10 @@ async function renderList(){
         filtered.map(c=>{
           const tier = tierById(c.alignmentTierId);
           const subParts = [];
-          if(c.metContext) subParts.push(c.metContext);
+          if(c.headline) subParts.push(c.headline);
           return `<div class="contact-row" data-open="${c.id}">
             ${avatarHtml(c, "avatar")}
-            <div><div class="c-name">${esc(c.name)||"(unnamed)"}</div><div class="c-sub">${esc(subParts.join(" · "))}</div></div>
+            <div><div class="c-name">${esc(fullName(c))||"(unnamed)"}</div><div class="c-sub">${esc(subParts.join(" · "))}</div></div>
             <div class="dot" style="background:${tier?tier.color:'#00000000'}"></div>
           </div>`;
         }).join("")}
@@ -253,6 +254,10 @@ function initials(name){
   const parts = name.trim().split(/\s+/);
   return ((parts[0]?.[0]||"") + (parts[1]?.[0]||"")).toUpperCase();
 }
+function contactInitials(c){
+  const i = (c.firstName?.[0]||"") + (c.lastName?.[0]||"");
+  return i ? i.toUpperCase() : "?";
+}
 
 /* ---------- CONTACT PROFILE ---------- */
 async function renderProfile(){
@@ -274,7 +279,10 @@ async function renderProfile(){
       <div class="profile-head">
         ${avatarHtml(c, "avatar avatar-lg")}
         <div style="flex:1;">
-          ${editing ? `<input type="text" id="f_name" placeholder="Name" value="${esc(c.name)}">` : `<div class="pname headline" style="font-size:20px;">${esc(c.name)||"(unnamed)"}</div>`}
+          ${editing ? `<div style="display:flex;gap:6px;">
+              <input type="text" id="f_firstName" placeholder="First name" value="${esc(c.firstName)}" style="flex:1;">
+              <input type="text" id="f_lastName" placeholder="Last name" value="${esc(c.lastName)}" style="flex:1;">
+            </div>` : `<div class="pname headline" style="font-size:20px;">${esc(fullName(c))||"(unnamed)"}</div>`}
           ${editing ? `
             <select id="f_alignment">
               <option value="">No alignment set</option>
@@ -297,15 +305,15 @@ async function renderProfile(){
         <input type="tel" id="f_phone" placeholder="+44 7700 900123" value="${esc(c.phone)}">
         <label class="field-label">Email</label>
         <input type="email" id="f_email" placeholder="name@example.com" value="${esc(c.email)}">
-        <label class="field-label">How you met / context</label>
-        <input type="text" id="f_context" placeholder="Coursemate, Chemistry" value="${esc(c.metContext)}">
+        <label class="field-label">Headline</label>
+        <input type="text" id="f_headline" placeholder="Coursemate, Chemistry" value="${esc(c.headline)}">
         <label class="field-label">Groups</label>
         <div id="groupChips">${renderGroupChips(c)}</div>
         <button class="btn btn-small" id="manageGroupsBtn" type="button">Manage in Settings</button>
       ` : `
         ${c.phone ? `<div class="info-row"><span class="ico">&#9742;</span> <a href="tel:${esc(c.phone)}">${esc(c.phone)}</a></div>` : ""}
         ${c.email ? `<div class="info-row"><span class="ico">&#9993;</span> <a href="mailto:${esc(c.email)}">${esc(c.email)}</a></div>` : ""}
-        ${c.metContext ? `<div class="info-row"><span class="ico">&#10022;</span> ${esc(c.metContext)}</div>` : ""}
+        ${c.headline ? `<div class="info-row"><span class="ico">&#10022;</span> ${esc(c.headline)}</div>` : ""}
         ${(c.groupIds||[]).length ? `<div style="margin-top:6px;">${(c.groupIds||[]).map(gid=>{const g=groupById(gid); return g?`<span class="chip">${esc(g.name)}</span>`:"";}).join("")}</div>` : ""}
       `}
 
@@ -341,7 +349,7 @@ async function renderProfile(){
   document.getElementById("backBtn").onclick = ()=> goto("list");
   const deleteBtn = document.getElementById("deleteContactBtn");
   if(deleteBtn) deleteBtn.onclick = async ()=>{
-    const ok = confirm(`Delete ${c.name || "this contact"}? This also removes their relationship links and timeline entries. This can't be undone.`);
+    const ok = confirm(`Delete ${fullName(c) || "this contact"}? This also removes their relationship links and timeline entries. This can't be undone.`);
     if(!ok) return;
     await deleteContactCascade(c.id);
     toast("Contact deleted.");
@@ -488,7 +496,7 @@ async function renderRelList(c, rels){
   const rows = await Promise.all(rels.map(async r=>{
     const otherId = r.a===c.id ? r.b : r.a;
     const other = await idbGet("contacts", otherId);
-    const otherName = other ? other.name : "(deleted)";
+    const otherName = other ? fullName(other) : "(deleted)";
     let arrow = "&harr;";
     if(r.direction==="A>B") arrow = r.a===c.id ? "&rarr;" : "&larr;";
     if(r.direction==="B>A") arrow = r.a===c.id ? "&larr;" : "&rarr;";
@@ -551,11 +559,12 @@ function renderTimelineList(timeline){
 }
 
 async function saveProfileFields(c){
-  c.name = document.getElementById("f_name").value.trim() || "(unnamed)";
+  c.firstName = document.getElementById("f_firstName").value.trim();
+  c.lastName = document.getElementById("f_lastName").value.trim();
   c.alignmentTierId = document.getElementById("f_alignment").value;
   c.phone = document.getElementById("f_phone").value.trim();
   c.email = document.getElementById("f_email").value.trim();
-  c.metContext = document.getElementById("f_context").value.trim();
+  c.headline = document.getElementById("f_headline").value.trim();
   document.querySelectorAll("[data-social-platform]").forEach(el=>{
     c.socialLinks[parseInt(el.dataset.socialPlatform,10)].platform = el.value;
   });
@@ -626,13 +635,13 @@ async function openRelationshipEditor(c, existing){
       <h3>${existing?"Edit":"Add"} relationship</h3>
       <label class="field-label">With</label>
       <select id="rel_other">
-        ${others.map(o=>`<option value="${o.id}" ${(o.id===r.a||o.id===r.b)&&o.id!==c.id?"selected":""}>${esc(o.name)}</option>`).join("")}
+        ${others.map(o=>`<option value="${o.id}" ${(o.id===r.a||o.id===r.b)&&o.id!==c.id?"selected":""}>${esc(fullName(o))}</option>`).join("")}
       </select>
       <label class="field-label">Direction</label>
       <select id="rel_direction">
         <option value="double" ${r.direction==="double"?"selected":""}>Double-sided (mutual)</option>
-        <option value="A>B" ${r.direction==="A>B"?"selected":""}>${esc(c.name)} &rarr; them</option>
-        <option value="B>A" ${r.direction==="B>A"?"selected":""}>Them &rarr; ${esc(c.name)}</option>
+        <option value="A>B" ${r.direction==="A>B"?"selected":""}>${esc(fullName(c))} &rarr; them</option>
+        <option value="B>A" ${r.direction==="B>A"?"selected":""}>Them &rarr; ${esc(fullName(c))}</option>
       </select>
       <label class="field-label">Description</label>
       <input type="text" id="rel_desc" placeholder="sister, introduced me to, manager..." value="${esc(r.description)}">
@@ -678,7 +687,7 @@ async function renderDates(){
       if(windowEnd && occDate > windowEnd) return;
       const year = parseInt(occDate.split("-")[0],10);
       const num = keyDateNumberFor(kd, year);
-      items.push({contactName:c.name, contactId:c.id, name:kd.name, date:occDate, num});
+      items.push({contactName:fullName(c), contactId:c.id, name:kd.name, date:occDate, num});
     });
   });
   items.sort((a,b)=> a.date.localeCompare(b.date));
@@ -731,12 +740,12 @@ async function exportICS(){
         while(d<=to){
           const year = parseInt(d.split("-")[0],10);
           const num = keyDateNumberFor(kd, year);
-          events.push({summary:`${c.name} — ${kd.name}${num?` (${ordinal(num)})`:""}`, date:d});
+          events.push({summary:`${fullName(c)} — ${kd.name}${num?` (${ordinal(num)})`:""}`, date:d});
           const [,m,dd] = d.split("-");
           d = `${year+1}-${m}-${dd}`;
         }
       } else if(kd.date>=from && kd.date<=to){
-        events.push({summary:`${c.name} — ${kd.name}`, date:kd.date});
+        events.push({summary:`${fullName(c)} — ${kd.name}`, date:kd.date});
       }
     });
   });
@@ -759,7 +768,7 @@ function icsEscape(s){ return (s||"").replace(/[\\,;]/g, m=>"\\"+m); }
 
 /* ---------- MINDMAP ---------- */
 async function renderMindmap(){
-  CONTACTS = (await idbGetAll("contacts")).sort((a,b)=>a.name.localeCompare(b.name));
+  CONTACTS = (await idbGetAll("contacts")).sort((a,b)=>fullName(a).localeCompare(fullName(b)));
   if(!state.mmBaseId && CONTACTS.length) state.mmBaseId = CONTACTS[0].id;
 
   $app().innerHTML = `
@@ -768,7 +777,7 @@ async function renderMindmap(){
     ${CONTACTS.length===0 ? `<div class="empty-note">Add some contacts first.</div>` : `
     <label class="field-label">Base contact</label>
     <select id="mm_base">
-      ${CONTACTS.map(c=>`<option value="${c.id}" ${c.id===state.mmBaseId?"selected":""}>${esc(c.name)}</option>`).join("")}
+      ${CONTACTS.map(c=>`<option value="${c.id}" ${c.id===state.mmBaseId?"selected":""}>${esc(fullName(c))}</option>`).join("")}
     </select>
     <div class="stepper">
       <button id="mm_dec">&minus;</button>
@@ -843,8 +852,8 @@ async function drawMindmap(){
     const p = pos[id];
     const size = id===state.mmBaseId ? 74 : 62;
     bubblesHtml += `<div class="bubble" style="width:${size}px;height:${size}px;left:${p.x-size/2}px;top:${p.y-size/2}px;">
-      <div class="bn">${esc(c.name)}</div>
-      <div class="br">${esc(c.metContext||"")}</div>
+      <div class="bn">${esc(fullName(c))}</div>
+      <div class="br">${esc(c.headline||"")}</div>
     </div>`;
   });
 
@@ -864,8 +873,11 @@ async function renderSettings(){
     <div class="settings-group">
       <h3>Groups</h3>
       <div id="groupsList">${GROUPS.map(g=>`
-        <div class="tier-row"><span class="tn">${esc(g.name)}</span>
-          <button class="btn btn-small" data-rm-group="${g.id}">delete</button></div>`).join("") || `<div class="empty-note">No groups yet.</div>`}
+        <div class="tier-row">
+          <input type="text" class="group-name-input" data-group-id="${g.id}" value="${esc(g.name)}" style="flex:1;margin-bottom:0;">
+          <button class="btn btn-small" data-save-group="${g.id}">save</button>
+          <button class="btn btn-small btn-danger" data-rm-group="${g.id}">delete</button>
+        </div>`).join("") || `<div class="empty-note">No groups yet.</div>`}
       </div>
       <div style="display:flex;gap:6px;margin-top:8px;">
         <input type="text" id="newGroupName" placeholder="New group name" style="flex:1;margin-bottom:0;">
@@ -901,6 +913,14 @@ async function renderSettings(){
     await idbPut("groups", {id:uid(), name});
     render();
   };
+  document.querySelectorAll("[data-save-group]").forEach(b=> b.onclick=async ()=>{
+    const input = document.querySelector(`.group-name-input[data-group-id="${b.dataset.saveGroup}"]`);
+    const name = input.value.trim();
+    if(!name){ toast("Group name can't be empty."); return; }
+    await idbPut("groups", {id:b.dataset.saveGroup, name});
+    toast("Group renamed.");
+    render();
+  });
   document.querySelectorAll("[data-rm-group]").forEach(b=> b.onclick=async ()=>{
     await idbDelete("groups", b.dataset.rmGroup);
     render();
@@ -980,7 +1000,8 @@ async function exportVCF(){
   let vcf = "";
   all.forEach(c=>{
     vcf += "BEGIN:VCARD\r\nVERSION:3.0\r\n";
-    vcf += `FN:${vcfEscape(c.name||"Unnamed")}\r\n`;
+    vcf += `N:${vcfEscape(c.lastName)};${vcfEscape(c.firstName)};;;\r\n`;
+    vcf += `FN:${vcfEscape(fullName(c))||"Unnamed"}\r\n`;
     if(c.phone) vcf += `TEL;TYPE=CELL:${vcfEscape(c.phone)}\r\n`;
     if(c.email) vcf += `EMAIL:${vcfEscape(c.email)}\r\n`;
     vcf += "END:VCARD\r\n";
@@ -1002,12 +1023,22 @@ async function importVCF(e){
   const cards = text.split(/BEGIN:VCARD/i).slice(1);
   let count=0;
   for(const block of cards){
-    const fn = /FN:(.*)/i.exec(block);
+    const nField = /^N:(.*)$/im.exec(block);
+    const fn = /^FN:(.*)$/im.exec(block);
     const tel = /TEL[^:]*:(.*)/i.exec(block);
     const email = /EMAIL[^:]*:(.*)/i.exec(block);
-    if(!fn) continue;
+    if(!fn && !nField) continue;
     const c = blankContact();
-    c.name = fn[1].trim();
+    if(nField){
+      const parts = nField[1].split(";");
+      c.lastName = (parts[0]||"").trim();
+      c.firstName = (parts[1]||"").trim();
+    }
+    if(!c.firstName && !c.lastName && fn){
+      const nameParts = fn[1].trim().split(/\s+/);
+      c.firstName = nameParts[0]||"";
+      c.lastName = nameParts.slice(1).join(" ");
+    }
     c.phone = tel ? tel[1].trim() : "";
     c.email = email ? email[1].trim() : "";
     await idbPut("contacts", c);

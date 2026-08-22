@@ -118,6 +118,64 @@ function eligibleGoalsFor(dateStr){
   return GOALS.filter(g=> isGoalEligible(g,dateStr));
 }
 
+/* ---------- quota goals (period + cycle target, day-agnostic) ---------- */
+function quotaCycleBounds(goal, dateStr){
+  if(dateStr < goal.periodStart || dateStr > goal.periodEnd) return null;
+  const cycleDays = Math.max(1, parseInt(goal.cycleDays||1,10));
+  const idx = Math.floor(daysBetween(goal.periodStart, dateStr)/cycleDays);
+  const cycleStart = addDays(goal.periodStart, idx*cycleDays);
+  let cycleEnd = addDays(cycleStart, cycleDays-1);
+  if(cycleEnd > goal.periodEnd) cycleEnd = goal.periodEnd;
+  return {cycleStart, cycleEnd, cycleIndex: idx};
+}
+async function quotaProgressOnDate(goal, dateStr, liveChecklist){
+  const bounds = quotaCycleBounds(goal, dateStr);
+  if(!bounds) return null;
+  const entries = await allEntriesInRange(bounds.cycleStart, dateStr);
+  const map = {}; entries.forEach(e=> map[e.date]=e);
+  let count = 0;
+  let d = bounds.cycleStart;
+  while(d <= dateStr){
+    let checked;
+    if(d === dateStr && liveChecklist){ checked = !!liveChecklist[goal.id]; }
+    else { checked = !!(map[d] && map[d].checklist && map[d].checklist[goal.id]); }
+    if(checked) count++;
+    d = addDays(d,1);
+  }
+  return {count, target: Math.max(1, parseInt(goal.targetCount||1,10)), cycleStart: bounds.cycleStart, cycleEnd: bounds.cycleEnd, met: count>=Math.max(1, parseInt(goal.targetCount||1,10))};
+}
+async function pendingQuotaGoalsFor(dateStr, liveChecklist){
+  const quotaGoals = GOALS.filter(g=> g.mode==="quota");
+  const out = [];
+  for(const g of quotaGoals){
+    const prog = await quotaProgressOnDate(g, dateStr, liveChecklist);
+    if(prog && !prog.met) out.push({goal:g, progress:prog});
+  }
+  return out;
+}
+async function computeQuotaCycleStats(goal){
+  const today = todayStr();
+  const hi = today < goal.periodEnd ? today : goal.periodEnd;
+  if(hi < goal.periodStart) return {completedCycles:0, totalElapsedCycles:0, current:null};
+  const cycleDays = Math.max(1, parseInt(goal.cycleDays||1,10));
+  let completed=0, totalElapsed=0, current=null;
+  let cs = goal.periodStart;
+  while(cs <= goal.periodEnd){
+    let ce = addDays(cs, cycleDays-1);
+    if(ce > goal.periodEnd) ce = goal.periodEnd;
+    if(ce <= hi){
+      const prog = await quotaProgressOnDate(goal, ce, null);
+      totalElapsed++;
+      if(prog && prog.met) completed++;
+    } else if(cs <= hi){
+      const prog = await quotaProgressOnDate(goal, hi, null);
+      current = prog;
+    }
+    cs = addDays(ce,1);
+  }
+  return {completedCycles:completed, totalElapsedCycles:totalElapsed, current};
+}
+
 /* ---------- entry helpers ---------- */
 function blankEntry(dateStr){
   return {
@@ -198,7 +256,7 @@ async function computeGoalStats(){
   const hi = today < end ? today : end;
   const entries = await allEntriesInRange(start, hi);
   const map = {}; entries.forEach(e=> map[e.date]=e);
-  const stats = {}; GOALS.forEach(g=> stats[g.id] = {name:g.name, eligible:0, hit:0});
+  const stats = {}; GOALS.filter(g=>g.mode!=="quota").forEach(g=> stats[g.id] = {name:g.name, eligible:0, hit:0});
   let d = start;
   while(d<=hi){
     const elig = eligibleGoalsFor(d);
@@ -357,6 +415,7 @@ function escapeHtml(s){ return (s||"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":
 /* ---------- LOG PAGE ---------- */
 let logCountdownInterval = null;
 let currentDraft = null;
+let currentQuotaPending = [];
 let autosaveTimer = null;
 let photoBlobUrl = null;
 
@@ -370,6 +429,7 @@ async function renderLog(){
   const locked = entry.status === "submitted";
   const late = dateStr < today; // any day prior to the current tz-day, if unsubmitted, is late
   currentDraft = JSON.parse(JSON.stringify(entry));
+  currentQuotaPending = locked ? [] : await pendingQuotaGoalsFor(dateStr, currentDraft.checklist);
 
   $app().innerHTML = `
     <div class="pagebar">
@@ -444,12 +504,16 @@ function renderEntryForm(dateStr, entry, eligible, locked, late){
   const d = currentDraft;
   const formEl = document.getElementById("entryForm");
 
-  const checklistHtml = eligible.length===0
+  const checklistHtml = (eligible.length===0 && currentQuotaPending.length===0)
     ? `<div class="empty-note">No goals are scheduled for this day.</div>`
     : `<div class="checklist">${eligible.map(g=>`
         <label class="check-item ${locked?'disabled':''}">
           <input type="checkbox" data-goal="${g.id}" ${d.checklist[g.id]?"checked":""} ${locked?"disabled":""}>
           <span>${escapeHtml(g.name)}</span>
+        </label>`).join("")}${currentQuotaPending.map(q=>`
+        <label class="check-item ${locked?'disabled':''}">
+          <input type="checkbox" data-quota-goal="${q.goal.id}" ${d.checklist[q.goal.id]?"checked":""} ${locked?"disabled":""}>
+          <span>${escapeHtml(q.goal.name)} <span style="opacity:0.6;font-size:12px;">(${q.progress.count}/${q.progress.target} this cycle)</span></span>
         </label>`).join("")}</div>`;
 
   const photoHtml = `
@@ -530,6 +594,14 @@ function renderEntryForm(dateStr, entry, eligible, locked, late){
 
   document.querySelectorAll("[data-goal]").forEach(chk=>{
     chk.onchange = ()=>{ d.checklist[chk.dataset.goal] = chk.checked; scheduleAutosave(dateStr); };
+  });
+  document.querySelectorAll("[data-quota-goal]").forEach(chk=>{
+    chk.onchange = async ()=>{
+      d.checklist[chk.dataset.quotaGoal] = chk.checked;
+      scheduleAutosave(dateStr);
+      currentQuotaPending = await pendingQuotaGoalsFor(dateStr, d.checklist);
+      renderEntryForm(dateStr, entry, eligible, locked, late);
+    };
   });
 
   const photoBtn = document.getElementById("photoBtn");
@@ -719,6 +791,9 @@ async function renderStats(){
   const {current, best} = await computeStreaks();
   const {logged, elapsed, pct} = await computeConsistency();
   const goalStats = await computeGoalStats();
+  const quotaGoals = GOALS.filter(g=> g.mode==="quota");
+  const quotaStatsList = [];
+  for(const g of quotaGoals){ quotaStatsList.push({goal:g, stats: await computeQuotaCycleStats(g)}); }
 
   $app().innerHTML = `
     <div class="pagebar">
@@ -743,6 +818,16 @@ async function renderStats(){
           <div class="track"><div class="fill" style="width:${rate}%"></div></div>
         </div>`;
       }).join("")}
+    ${quotaStatsList.length>0 ? `
+    <h3 style="font-size:13px;color:var(--pink);margin:18px 0 10px;">Quota goal cycles</h3>
+    ${quotaStatsList.map(q=>{
+      const rate = q.stats.totalElapsedCycles? Math.round((q.stats.completedCycles/q.stats.totalElapsedCycles)*100):0;
+      const currentNote = q.stats.current ? ` \u00b7 current cycle ${q.stats.current.count}/${q.stats.current.target}` : "";
+      return `<div class="goal-stat">
+        <div class="top"><span>${escapeHtml(q.goal.name)}</span><span>${q.stats.completedCycles}/${q.stats.totalElapsedCycles} cycles (${rate}%)${currentNote}</span></div>
+        <div class="track"><div class="fill" style="width:${rate}%"></div></div>
+      </div>`;
+    }).join("")}` : ""}
   `;
   wireNav();
 }
@@ -854,6 +939,14 @@ function goalDesc(g){
   }
   if(g.mode==="everyN") return `Every ${g.intervalDays} day(s) \u00b7 ${g.startDate} \u2192 ${g.endDate}`;
   if(g.mode==="dates") return `${(g.dates||[]).length} specific date(s)`;
+  if(g.mode==="quota"){
+    const cycleDays = parseInt(g.cycleDays||1,10);
+    const periodDays = daysBetween(g.periodStart,g.periodEnd)+1;
+    const isWhole = cycleDays >= periodDays;
+    return isWhole
+      ? `${g.targetCount}\u00d7 total \u00b7 ${g.periodStart} \u2192 ${g.periodEnd}`
+      : `${g.targetCount}\u00d7 every ${cycleDays} day(s) \u00b7 ${g.periodStart} \u2192 ${g.periodEnd}`;
+  }
   return "";
 }
 function renderGoalsList(){
@@ -898,7 +991,7 @@ function renderMilestonesList(){
 }
 
 function openGoalEditor(existing){
-  const g = existing || {id:uid(), name:"", mode:"weekday", weekday:1, intervalWeeks:1, intervalDays:1, startDate:SETTINGS.startDate, endDate:SETTINGS.endDate, dates:[]};
+  const g = existing || {id:uid(), name:"", mode:"weekday", weekday:1, intervalWeeks:1, intervalDays:1, startDate:SETTINGS.startDate, endDate:SETTINGS.endDate, dates:[], periodStart:SETTINGS.startDate, periodEnd:SETTINGS.endDate, cycleDays:7, targetCount:3};
   const overlay = document.createElement("div");
   overlay.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:150;display:flex;align-items:flex-end;";
   overlay.innerHTML = `
@@ -910,6 +1003,7 @@ function openGoalEditor(existing){
           <option value="weekday" ${g.mode==="weekday"?"selected":""}>Weekday, every N weeks</option>
           <option value="everyN" ${g.mode==="everyN"?"selected":""}>Every N days</option>
           <option value="dates" ${g.mode==="dates"?"selected":""}>Specific dates</option>
+          <option value="quota" ${g.mode==="quota"?"selected":""}>Quota (X times per cycle)</option>
         </select>
       </div>
       <div id="g_modeFields"></div>
@@ -939,10 +1033,29 @@ function openGoalEditor(existing){
           <div class="field"><label>Start date</label><input type="date" id="g_start" value="${g.startDate||SETTINGS.startDate}"></div>
           <div class="field"><label>End date</label><input type="date" id="g_end" value="${g.endDate||SETTINGS.endDate}"></div>
         </div>`;
-    } else {
+    } else if(mode==="dates"){
       wrap.innerHTML = `
         <div class="field"><label>Dates (dd/mm/yyyy, one per line)</label>
         <textarea id="g_dates" style="min-height:100px;">${(g.dates||[]).map(ymdToDDMMYYYY).join("\n")}</textarea></div>`;
+    } else if(mode==="quota"){
+      const periodDays = (g.periodStart && g.periodEnd) ? daysBetween(g.periodStart,g.periodEnd)+1 : 0;
+      const isWhole = parseInt(g.cycleDays||0,10) >= periodDays && periodDays>0;
+      wrap.innerHTML = `
+        <div class="row2">
+          <div class="field"><label>Period start</label><input type="date" id="g_periodStart" value="${g.periodStart||SETTINGS.startDate}"></div>
+          <div class="field"><label>Period end</label><input type="date" id="g_periodEnd" value="${g.periodEnd||SETTINGS.endDate}"></div>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-size:13px;">
+          <input type="checkbox" id="g_wholePeriod" ${isWhole?"checked":""}> Treat the whole period as one single cycle
+        </label>
+        <div id="g_cycleWrap" style="${isWhole?"display:none;":""}">
+          <div class="field"><label>Cycle length (days)</label><input type="number" id="g_cycleDays" min="1" value="${g.cycleDays||7}"></div>
+        </div>
+        <div class="field"><label>Target count per cycle</label><input type="number" id="g_targetCount" min="1" value="${g.targetCount||1}"></div>
+        <div class="empty-note" style="margin-top:6px;">e.g. \u201C3 weeks, 3 times every week\u201D \u2192 period = 3 weeks, cycle = 7 days, target = 3. \u201CReach 5 times by the end\u201D \u2192 tick \u201Cwhole period as one cycle\u201D, target = 5.</div>`;
+      document.getElementById("g_wholePeriod").onchange = (e)=>{
+        document.getElementById("g_cycleWrap").style.display = e.target.checked ? "none" : "";
+      };
     }
   }
   renderModeFields();
@@ -960,9 +1073,17 @@ function openGoalEditor(existing){
       g.intervalDays = Math.max(1, parseInt(document.getElementById("g_intervalDays").value||1,10));
       g.startDate = document.getElementById("g_start").value;
       g.endDate = document.getElementById("g_end").value;
-    } else {
+    } else if(g.mode==="dates"){
       const raw = document.getElementById("g_dates").value.split("\n").map(s=>s.trim()).filter(Boolean);
       g.dates = raw.map(ddmmyyyyToYMD).filter(Boolean);
+    } else if(g.mode==="quota"){
+      g.periodStart = document.getElementById("g_periodStart").value;
+      g.periodEnd = document.getElementById("g_periodEnd").value;
+      const wholePeriod = document.getElementById("g_wholePeriod").checked;
+      g.targetCount = Math.max(1, parseInt(document.getElementById("g_targetCount").value||1,10));
+      g.cycleDays = wholePeriod
+        ? Math.max(1, daysBetween(g.periodStart,g.periodEnd)+1)
+        : Math.max(1, parseInt(document.getElementById("g_cycleDays").value||1,10));
     }
     await idbPut("goals", g);
     const idx = GOALS.findIndex(x=>x.id===g.id);
