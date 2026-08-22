@@ -20,7 +20,56 @@ LE.moduleColor = function (moduleNode, siblingIndex) {
   return LE.MODULE_PALETTE[(siblingIndex || 0) % LE.MODULE_PALETTE.length];
 };
 
-// ---- modal system ----
+// Natural sort: "Item 2" before "Item 10", not lexicographic.
+LE.naturalCompare = function (a, b) {
+  return String(a || '').localeCompare(String(b || ''), undefined, { numeric: true, sensitivity: 'base' });
+};
+
+LE.sortNodesByMode = function (nodes, mode) {
+  const list = nodes.slice();
+  if (mode === 'alpha') return list.sort((a, b) => LE.naturalCompare(a.name, b.name));
+  if (mode === 'date') return list.sort((a, b) => {
+    const da = a.dateEnd || a.dateStart, db = b.dateEnd || b.dateStart;
+    if (!da && !db) return (a.order || 0) - (b.order || 0);
+    if (!da) return 1;
+    if (!db) return -1;
+    return new Date(da) - new Date(db);
+  });
+  return list.sort((a, b) => (a.order || 0) - (b.order || 0)); // manual
+};
+
+LE.sortAssessmentsByMode = function (assessments, mode) {
+  const list = assessments.slice();
+  if (mode === 'alpha') return list.sort((a, b) => LE.naturalCompare(a.name, b.name));
+  if (mode === 'deadline') return list.sort((a, b) => {
+    if (!a.deadline && !b.deadline) return (a.order || 0) - (b.order || 0);
+    if (!a.deadline) return 1;
+    if (!b.deadline) return -1;
+    return new Date(a.deadline) - new Date(b.deadline);
+  });
+  return list.sort((a, b) => (a.order || 0) - (b.order || 0)); // manual
+};
+
+// Renders a small "Sort: [mode]" selector. onChangeFn is a global function name string called with the new mode.
+LE.sortModeSelector = function (currentMode, onChangeFn) {
+  const modes = [['manual', 'Manual'], ['alpha', 'Alphabetical'], ['date', 'Date']];
+  return `<select class="le-sort-select" onchange="${onChangeFn}this.value)">
+    ${modes.map(([v, l]) => `<option value="${v}" ${currentMode === v ? 'selected' : ''}>${l}</option>`).join('')}
+  </select>`;
+};
+LE.sortModeSelectorAssessments = function (currentMode, onChangeFn) {
+  const modes = [['manual', 'Manual'], ['alpha', 'Alphabetical'], ['deadline', 'Deadline']];
+  return `<select class="le-sort-select" onchange="${onChangeFn}this.value)">
+    ${modes.map(([v, l]) => `<option value="${v}" ${currentMode === v ? 'selected' : ''}>${l}</option>`).join('')}
+  </select>`;
+};
+
+LE.reorderButtons = function (moveUpFn, moveDownFn, isFirst, isLast) {
+  return `<span class="le-reorder">
+    <button class="le-reorder-btn" ${isFirst ? 'disabled' : ''} onclick="event.stopPropagation(); ${moveUpFn}">▲</button>
+    <button class="le-reorder-btn" ${isLast ? 'disabled' : ''} onclick="event.stopPropagation(); ${moveDownFn}">▼</button>
+  </span>`;
+};
 LE.openModal = function (innerHtml) {
   LE.closeModal();
   const backdrop = document.createElement('div');

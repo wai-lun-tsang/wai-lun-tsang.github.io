@@ -22,7 +22,8 @@ LE.renderMarks = async function (container) {
   years.forEach(year => {
     const isFinalYear = year.yearNumber === finalYearNumber;
     const terms = allNodes.filter(n => n.type === 'term' && n.parentId === year.id).sort((a, b) => a.order - b.order);
-    const fullYearModules = modules.filter(m => m.parentId === year.id);
+    const fullYearModules = modules.filter(m => m.parentId === year.id).sort((a, b) => (a.order || 0) - (b.order || 0));
+    const yearCreditTotal = LE.yearModuleCreditTotal(year.id, allNodes);
 
     // Year-level PYM/CYM needs every module belonging to this year, full-year or per-term, once each.
     const allYearModules = fullYearModules.concat(
@@ -48,12 +49,16 @@ LE.renderMarks = async function (container) {
     if (fullYearModules.length) {
       html += `<div class="le-list" style="padding-top:0">`;
       fullYearModules.forEach(m => { html += LE.renderModuleBlock(m, assessmentsByModule[m.id] || [], settings); });
-      html += `<button class="le-btn secondary small" onclick="LE.openNodeForm('module', null, '${year.id}')"><i class="ti ti-plus"></i> Add full-year module</button>`;
       html += `</div>`;
+    }
+    if (yearCreditTotal >= LE.YEAR_CREDIT_CAP) {
+      html += `<p class="le-hint" style="padding:0 18px 8px">This year is already at ${yearCreditTotal} of ${LE.YEAR_CREDIT_CAP} credits — no more modules can be added.</p>`;
+    } else {
+      html += `<div class="le-fab-row"><button class="le-btn secondary small" onclick="LE.openNodeForm('module', null, '${year.id}')"><i class="ti ti-plus"></i> Add full-year module</button></div>`;
     }
 
     terms.forEach(term => {
-      const termModules = modules.filter(m => m.parentId === term.id);
+      const termModules = modules.filter(m => m.parentId === term.id).sort((a, b) => (a.order || 0) - (b.order || 0));
       const strictList = termModules.map(m => ({ id: m.id, credit: m.creditValue || 15, assessments: assessmentsByModule[m.id] || [] }));
       const inclusiveList = strictList.concat(fullYearModules.map(m => ({ id: m.id, credit: m.creditValue || 15, assessments: assessmentsByModule[m.id] || [] })));
       const tf = LE.termFigures(strictList, inclusiveList, settings);
@@ -75,8 +80,12 @@ LE.renderMarks = async function (container) {
       html += `<div class="le-list" style="padding-top:0">`;
       if (termModules.length === 0) html += `<p class="le-hint" style="padding:0 0 8px">No modules under this term yet.</p>`;
       termModules.forEach(m => { html += LE.renderModuleBlock(m, assessmentsByModule[m.id] || [], settings); });
-      html += `<button class="le-btn secondary small" onclick="LE.openNodeForm('module', null, '${term.id}')"><i class="ti ti-plus"></i> Add module</button>`;
       html += `</div>`;
+      if (yearCreditTotal >= LE.YEAR_CREDIT_CAP) {
+        html += `<p class="le-hint" style="padding:0 18px 8px">This year is already at ${yearCreditTotal} of ${LE.YEAR_CREDIT_CAP} credits — no more modules can be added.</p>`;
+      } else {
+        html += `<div class="le-fab-row"><button class="le-btn secondary small" onclick="LE.openNodeForm('module', null, '${term.id}')"><i class="ti ti-plus"></i> Add module</button></div>`;
+      }
     });
   });
 
@@ -102,17 +111,31 @@ LE.renderMarks = async function (container) {
 
 LE.renderModuleBlock = function (m, modAssessments, settings) {
   const fig = LE.moduleFigures(modAssessments, settings);
+  const sortMode = m.assessmentSortMode || 'manual';
+  const sorted = LE.sortAssessmentsByMode(modAssessments, sortMode);
+  const weightTotal = modAssessments.reduce((s, a) => s + (a.weightWithinModule || 0), 0);
+
   let html = `<div class="le-module-block">
     <div class="head">
       <span class="name">${m.moduleCode ? LE.escapeHtml(m.moduleCode) + ' · ' : ''}${LE.escapeHtml(m.name)}</span>
       <span class="pct ${LE.colourClass(fig.allAssessments)}">${LE.fmtPct(fig.allAssessments)} of 100%</span>
     </div>`;
-  modAssessments.slice().sort((a, b) => new Date(a.deadline || 0) - new Date(b.deadline || 0)).forEach(a => {
+  if (sorted.length > 1) {
+    html += `<div class="le-list-head" style="padding:0 0 6px">
+      <span class="le-hint" style="margin-top:0">Sort</span>
+      ${LE.sortModeSelectorAssessments(sortMode, `LE.changeAssessmentSortMode('${m.id}',`)}
+    </div>`;
+  }
+  sorted.forEach((a, i) => {
     const af = LE.assessmentFigures(a, settings);
     const { note } = LE.computePenalizedMark(a, settings);
     const extLabel = a.extensionMode === 'percentage' ? `+${a.extensionValue || 0}%` : (a.extensionValue ? `+${a.extensionValue}min` : '');
+    const reorder = sortMode === 'manual'
+      ? LE.reorderButtons(`LE.moveAssessment('${a.id}','${m.id}','up')`, `LE.moveAssessment('${a.id}','${m.id}','down')`, i === 0, i === sorted.length - 1)
+      : '';
     html += `<div class="le-assessment-row">
       <div class="row1">
+        ${reorder}
         <span class="name">${LE.escapeHtml(a.name)}</span>
         <span class="value ${LE.colourClass(af.obtainedPct)}">${af.penalizedMark != null ? af.penalizedMark.toFixed(1) : '—'} / ${a.maxMark}</span>
       </div>
@@ -128,9 +151,35 @@ LE.renderModuleBlock = function (m, modAssessments, settings) {
       </div>
     </div>`;
   });
-  html += `<button class="le-btn secondary small" onclick="LE.openAssessmentForm(null, '${m.id}')"><i class="ti ti-plus"></i> Add assessment</button>`;
+  if (weightTotal >= 100) {
+    html += `<p class="le-hint">Assessment weights already total ${weightTotal}% of this module — no more can be added without editing an existing one first.</p>`;
+  } else {
+    html += `<button class="le-btn secondary small" onclick="LE.openAssessmentForm(null, '${m.id}')"><i class="ti ti-plus"></i> Add assessment</button>`;
+  }
   html += `</div>`;
   return html;
+};
+
+LE.changeAssessmentSortMode = async function (moduleId, mode) {
+  const module = await LE.getNode(moduleId);
+  module.assessmentSortMode = mode;
+  await LE.saveNode(module);
+  LE.render();
+};
+
+LE.moveAssessment = async function (assessmentId, moduleId, direction) {
+  const module = await LE.getNode(moduleId);
+  if ((module.assessmentSortMode || 'manual') !== 'manual') return;
+  const siblings = await LE.getAssessmentsByModule(moduleId);
+  const sorted = LE.sortAssessmentsByMode(siblings, 'manual');
+  const idx = sorted.findIndex(a => a.id === assessmentId);
+  const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (idx === -1 || swapIdx < 0 || swapIdx >= sorted.length) return;
+  const a = sorted[idx], b = sorted[swapIdx];
+  const tmp = a.order || 0; a.order = b.order || 0; b.order = tmp;
+  await LE.saveAssessment(a);
+  await LE.saveAssessment(b);
+  LE.render();
 };
 
 // ---- assessment form ----
@@ -197,7 +246,7 @@ LE.onAssessmentFormatChange = function () {
 
 LE.saveAssessmentForm = async function (assessmentId, moduleId) {
   const existing = assessmentId ? await LE.getAssessment(assessmentId) : null;
-  const a = existing ? { ...existing } : { id: LE.uuid(), moduleId, linkedMaterialId: null };
+  const a = existing ? { ...existing } : { id: LE.uuid(), moduleId, linkedMaterialId: null, order: (await LE.getAssessmentsByModule(moduleId)).length };
   a.name = LE.fieldVal('a-name') || 'Untitled assessment';
   a.weightWithinModule = LE.fieldVal('a-weight') ?? 0;
   a.maxMark = LE.fieldVal('a-max') ?? 100;

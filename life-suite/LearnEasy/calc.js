@@ -284,6 +284,17 @@ LE.bestCreditSubset = function (modules, targetCredits) {
 };
 
 // Degree-level: Final Weighted Mark from year CYMs
+LE.YEAR_CREDIT_CAP = 120;
+LE.yearModuleCreditTotal = function (yearId, allNodes) {
+  const termIds = new Set(allNodes.filter(n => n.type === 'term' && n.parentId === yearId).map(t => t.id));
+  return allNodes.filter(n => n.type === 'module' && (n.parentId === yearId || termIds.has(n.parentId)))
+    .reduce((s, m) => s + (m.creditValue || 15), 0);
+};
+
+LE.isAssessmentLinked = function (node) {
+  return node.type === 'material' && !!node.linkedAssessmentId;
+};
+
 LE.YEAR_WEIGHTS = { BSc: [1, 3, 5], MEng: [1, 3, 5, 5] };
 
 LE.degreeFigures = function (yearCYMs, programmeRoute) {
