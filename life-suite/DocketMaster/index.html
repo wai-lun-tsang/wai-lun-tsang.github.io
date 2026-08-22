@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#FFFBF2">
+<title>DocketMaster</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Shantell+Sans:wght@400;500;600;700&family=Quicksand:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <filter id="crayon-rough">
+    <feTurbulence type="fractalNoise" baseFrequency="0.015" numOctaves="2" seed="4" result="noise"/>
+    <feDisplacementMap in="SourceGraphic" in2="noise" scale="6"/>
+  </filter>
+</svg>
+
+<header class="topbar">
+  <h1 class="logo">DocketMaster</h1>
+  <button id="addTaskBtn" class="add-btn" aria-label="Add task" title="Add task">+</button>
+</header>
+
+<main id="view-root" class="view-root"></main>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<nav class="tabbar" id="tabbar">
+  <button class="tab-btn" data-view="backlog"><span class="tab-icon">📥</span><span>Backlog</span></button>
+  <button class="tab-btn" data-view="quadrant"><span class="tab-icon">🎯</span><span>Quadrant</span></button>
+  <button class="tab-btn" data-view="day"><span class="tab-icon">📅</span><span>Day</span></button>
+  <button class="tab-btn" data-view="week"><span class="tab-icon">🗓️</span><span>Week</span></button>
+  <button class="tab-btn" data-view="timer"><span class="tab-icon">⏱️</span><span>Timer</span></button>
+  <button class="tab-btn" data-view="settings"><span class="tab-icon">⚙️</span><span>Settings</span></button>
+</nav>
+
+<div id="modal-root"></div>
+
+<script src="js/db.js"></script>
+<script src="js/defaults.js"></script>
+<script src="js/recurrence.js"></script>
+<script src="js/tasks.js"></script>
+<script src="js/sync.js"></script>
+<script src="js/ics.js"></script>
+<script src="js/timer.js"></script>
+<script src="js/backup.js"></script>
+<script src="js/ui-taskmodal.js"></script>
+<script src="js/ui-views.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LearnEasy</title>
+<meta name="theme-color" content="#FBF8F2">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/2.44.0/iconfont/tabler-icons.min.css">
+</head>
+<body>
+
+<header class="le-app-header">
+  <div class="le-brand" id="le-brand-logo"></div>
+  <button class="le-icon-btn" id="le-settings-shortcut" title="Settings" aria-label="Settings">⚙</button>
+</header>
+
+<main id="le-content"></main>
+
+<nav class="le-tabbar">
+  <button class="le-tab active" data-tab="progress"><i class="ti ti-chart-donut"></i><span>Progress</span></button>
+  <button class="le-tab" data-tab="marks"><i class="ti ti-report"></i><span>Marks</span></button>
+  <button class="le-tab" data-tab="settings"><i class="ti ti-settings"></i><span>Settings</span></button>
+</nav>
+
+<script src="db.js"></script>
+<script src="calc.js"></script>
+<script src="ui-common.js"></script>
+<script src="ui-progress.js"></script>
+<script src="ui-marks.js"></script>
+<script src="ui-settings.js"></script>
+<script src="main.js"></script>
+<script>
+  document.getElementById('le-brand-logo').innerHTML = LE.logoSVG(22, 11) + '<span>LearnEasy</span>';
+</script>
+</body>
+</html>
