@@ -43,6 +43,7 @@ Commit the upload.
 From that point on, opening it from the home screen runs the app fully offline. GitHub is never contacted again — it was only the one-time delivery mechanism.
 
 ## Notes
-- All your data (entries, goals, milestones, photos) lives only in this phone's browser storage. It is not backed up anywhere automatically.
-- Use the **Export** button in Settings regularly to download a `.zip` backup (structured data + photos + a readable summary) — this is your safety net against a lost phone, a cleared browser, or a reinstall.
+- All your data (entries, goals, milestones, photos/videos) lives only in this phone's browser storage. It is not backed up anywhere automatically.
+- **Settings → Full Backup & Restore** downloads a single `.json` file containing absolutely everything — settings, every goal, every milestone, and every entry ever logged, for the whole life of this instance, with photos and videos embedded directly in the file (not a separate folder). This is the file to keep somewhere safe (cloud drive, email to yourself, etc.) and the one to use if the app is ever lost, the phone is reset, or you reinstall — use the **Restore from backup** button on that same file to load it all back in.
+- The regular **Export** button (structured data + photos folder + a readable summary, as a `.zip`) is still there for a specific date range — good for reading through or sharing a slice of your history, but it's not meant as the primary recovery backup; use Full Backup for that.
 - If you ever want to update the app itself (a bug fix, a new feature), the new files just need re-uploading to the same GitHub repository, and Chrome will pick up the update next time you open the installed app while online.

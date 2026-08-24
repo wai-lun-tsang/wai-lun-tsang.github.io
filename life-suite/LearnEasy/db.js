@@ -58,6 +58,7 @@ LE.dbPut = async (store, value) => reqToPromise((await tx(store, 'readwrite')).p
 LE.dbDelete = async (store, id) => reqToPromise((await tx(store, 'readwrite')).delete(id));
 LE.dbGetByIndex = async (store, index, value) =>
   reqToPromise((await tx(store, 'readonly')).index(index).getAll(value));
+LE.dbClear = async (store) => reqToPromise((await tx(store, 'readwrite')).clear());
 
 // ---- nodes ----
 LE.getNode = (id) => LE.dbGet('nodes', id);
@@ -158,6 +159,25 @@ LE.seedIfEmpty = function () {
   return _seedPromise;
 };
 
+// Replaces ALL current data with a previously exported JSON backup (the same shape
+// Settings → Export JSON produces: { nodes, assessments, settings }). Destructive —
+// callers are responsible for confirming with the user first.
+LE.importFullBackup = async (data) => {
+  if (!data || typeof data !== 'object' || !Array.isArray(data.nodes)) {
+    throw new Error('Not a valid LearnEasy backup file — missing a "nodes" array.');
+  }
+  await LE.dbClear('nodes');
+  await LE.dbClear('assessments');
+  await LE.dbClear('settings');
+
+  for (const n of data.nodes) await LE.dbPut('nodes', n);
+  for (const a of (data.assessments || [])) await LE.dbPut('assessments', a);
+  if (data.settings && typeof data.settings === 'object') {
+    await LE.dbPut('settings', { ...data.settings, key: 'app' });
+  }
+
+  await LE.seedIfEmpty(); // safety net — only acts if the file somehow had zero nodes
+};
 // Returns years visible under the current programme route (Year 4 hidden, not deleted, when BSc)
 LE.visibleYears = function (allYears, programmeRoute) {
   const maxYear = programmeRoute === 'MEng' ? 4 : 3;

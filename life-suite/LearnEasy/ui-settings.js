@@ -90,6 +90,10 @@ LE.renderSettings = async function (container) {
         <button class="le-btn secondary" onclick="LE.exportData('json')">Export JSON</button>
         <button class="le-btn secondary" style="margin-left:8px" onclick="LE.exportData('csv')">Export CSV</button>
         <p class="le-hint">Manual, on-demand only — nothing is ever synced automatically off this device.</p>
+        <hr class="le-divider">
+        <input type="file" id="s-import-file" accept="application/json,.json" style="display:none" onchange="LE.handleImportFile(this)">
+        <button class="le-btn secondary" onclick="document.getElementById('s-import-file').click()">Import JSON backup…</button>
+        <p class="le-hint">Replaces <strong>all</strong> current data with the contents of a previously exported JSON file — export a backup first if you're not sure. CSV isn't supported for import; it doesn't carry the tree structure or settings.</p>
       </div>
     </div>
 
@@ -138,6 +142,27 @@ LE.saveSettingsForm = async function () {
   }
 
   LE.render();
+};
+
+LE.handleImportFile = async function (input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  if (!confirm('Importing will REPLACE all current data in LearnEasy with the contents of this file. This cannot be undone. Continue?')) {
+    input.value = '';
+    return;
+  }
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    await LE.importFullBackup(data);
+    LE.state.currentNodeId = null; // fall back to the imported default start node
+    LE.state.tab = 'progress';
+    await LE.render();
+    alert('Import complete.');
+  } catch (err) {
+    alert('Import failed: ' + (err && err.message ? err.message : String(err)));
+  }
+  input.value = '';
 };
 
 LE.exportData = async function (format) {

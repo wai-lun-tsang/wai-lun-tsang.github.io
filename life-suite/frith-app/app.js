@@ -898,6 +898,14 @@ async function renderSettings(){
       </div>
       <button class="btn-grad" id="exportBtn">Export .zip</button>
     </div>
+
+    <div class="settings-group">
+      <h3>Full Backup &amp; Restore</h3>
+      <div class="empty-note" style="margin-bottom:10px;">A single file containing everything — settings, all goals, all milestones, and every entry ever logged (including photos/videos, embedded directly in the file) — for the whole life of this instance, not limited by the export range above. Keep this somewhere safe; if the app or this device is ever lost, this file is what you'd restore from.</div>
+      <button class="btn-grad" id="backupBtn" style="margin-bottom:10px;">Download full backup (.json)</button>
+      <input type="file" accept=".json,application/json" id="restoreInput" style="display:none;">
+      <button class="btn" id="restoreBtn" style="width:100%;">Restore from backup</button>
+    </div>
   `;
   wireNav();
   updateDayCountNote();
@@ -924,6 +932,9 @@ async function renderSettings(){
   document.getElementById("addGoalBtn").onclick = ()=> openGoalEditor(null);
   document.getElementById("addMilestoneBtn").onclick = ()=> openMilestoneEditor(null);
   document.getElementById("exportBtn").onclick = runExport;
+  document.getElementById("backupBtn").onclick = runFullBackup;
+  document.getElementById("restoreBtn").onclick = ()=> document.getElementById("restoreInput").click();
+  document.getElementById("restoreInput").onchange = runRestore;
 }
 function updateDayCountNote(){
   const s = document.getElementById("s_start").value, e = document.getElementById("s_end").value;
@@ -1256,6 +1267,96 @@ function mediaExt(entry){
   }
   return "jpg";
 }
+/* ---------- full backup (single JSON, everything, photos embedded) ---------- */
+function blobToBase64(blob){
+  return new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=> resolve(reader.result); // data URL, includes "data:<mime>;base64,"
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+function base64ToBlob(dataUrl){
+  const [header, base64] = dataUrl.split(",");
+  const mime = /data:(.*?);base64/.exec(header)?.[1] || "application/octet-stream";
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], {type: mime});
+}
+
+async function runFullBackup(){
+  toast("Building full backup\u2026");
+  const allEntries = await idbGetAll("entries");
+  const entriesOut = [];
+  for(const e of allEntries){
+    const copy = {...e};
+    if(copy.photo instanceof Blob){
+      copy.photoDataUrl = await blobToBase64(copy.photo);
+    }
+    delete copy.photo; // replaced by photoDataUrl above
+    entriesOut.push(copy);
+  }
+  const backup = {
+    _frithBackup: true,
+    backupVersion: 1,
+    exportedAt: new Date().toISOString(),
+    settings: SETTINGS,
+    goals: GOALS,
+    milestones: MILESTONES,
+    entries: entriesOut
+  };
+  const blob = new Blob([JSON.stringify(backup)], {type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${SETTINGS.projectName.replace(/\s+/g,"_")}_${SETTINGS.instanceName.replace(/\s+/g,"_")}_full_backup_${todayStr()}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 4000);
+  toast("Full backup downloaded.");
+}
+
+async function runRestore(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  let backup;
+  try{
+    backup = JSON.parse(await file.text());
+  }catch(err){
+    toast("That file doesn't look like a valid backup.");
+    return;
+  }
+  if(!backup._frithBackup){
+    toast("That file doesn't look like a FRITH backup.");
+    return;
+  }
+  const ok = confirm(
+    "Restore this backup? Settings, goals, milestones, and entries in the file will be written back " +
+    "(entries/goals/milestones matching an existing date or id are overwritten; nothing else is deleted first). This can't be undone easily — continue?"
+  );
+  if(!ok) return;
+  toast("Restoring\u2026");
+
+  if(backup.settings) await idbPut("meta", backup.settings);
+  if(Array.isArray(backup.goals)) for(const g of backup.goals) await idbPut("goals", g);
+  if(Array.isArray(backup.milestones)) for(const m of backup.milestones) await idbPut("milestones", m);
+  if(Array.isArray(backup.entries)){
+    for(const entry of backup.entries){
+      const restored = {...entry};
+      if(restored.photoDataUrl){
+        restored.photo = base64ToBlob(restored.photoDataUrl);
+      } else {
+        restored.photo = null;
+      }
+      delete restored.photoDataUrl;
+      await idbPut("entries", restored);
+    }
+  }
+  await loadAll();
+  toast("Backup restored.");
+  goto("settings");
+}
+
 async function runExport(){
   const includeJson = document.getElementById("exp_json").checked;
   const includePhotos = document.getElementById("exp_photos").checked;

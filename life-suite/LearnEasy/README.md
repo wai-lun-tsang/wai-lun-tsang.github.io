@@ -46,7 +46,8 @@ This app is built to eventually live at `https://<your-username>.github.io/learn
 ## Data & privacy
 
 - All data is stored locally in your browser's IndexedDB (database name `learneasy`). Nothing is ever sent anywhere.
-- Export is manual only, from Settings → Data: JSON (full backup) or CSV (marks only, flat).
+- Export is manual only, from Settings → Data: JSON (full backup — everything, including your whole Progress tree, assessments, and settings) or CSV (marks only, flat, for spreadsheets — not re-importable).
+- Import (Settings → Data → "Import JSON backup…") restores a previously exported JSON file. **This replaces all current data** — export a backup first if you want to keep what's currently there. Useful for moving to a new browser/device, or recovering after clearing site data. Only the JSON format can be imported; CSV doesn't carry the tree structure or settings needed to restore properly.
 - Because IndexedDB is scoped by origin, once every app in your suite is hosted under the same GitHub Pages username, they'll share one origin — meaning DocketMaster (the task planner) can read LearnEasy's data directly, with no export step, the same way it's designed to read FRITH and ContactPlus. A schema reference document is included separately for whoever builds/maintains DocketMaster.
 
 ## Known open items (see the spec document for detail)
