@@ -143,6 +143,23 @@
       <input type="number" id="settings-default-minutes" min="1">
     </label>
 
+    <h2>Bulk add books</h2>
+    <p class="hint">One book per line — just a title, or <code>Title, Author</code>. Everything else (format, total length, per-book tags) can be filled in later by editing the book individually. The status and shelves below apply to the whole batch.</p>
+    <form id="bulk-add-form">
+      <label>Books (one per line)
+        <textarea id="bulk-add-text" rows="6" placeholder="The Overstory, Richard Powers&#10;Braiding Sweetgrass, Robin Wall Kimmerer&#10;Pachinko"></textarea>
+      </label>
+      <label>Status for all
+        <select id="bulk-add-status"></select>
+      </label>
+      <label>Shelves / tags for all (optional)
+        <input type="text" id="bulk-add-tags" placeholder="comma-separated, e.g. Fiction, To Read">
+      </label>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Add books</button>
+      </div>
+    </form>
+
     <h2>Backup</h2>
     <p class="hint">Export saves everything in this app to a JSON file on your device. Import replaces all current data with a previously exported file — use it after reinstalling or updating the app if data was reset.</p>
     <div class="form-actions">

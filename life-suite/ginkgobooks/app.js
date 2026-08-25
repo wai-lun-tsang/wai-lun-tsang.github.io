@@ -213,6 +213,39 @@ async function saveBookFromForm() {
   return book;
 }
 
+// Bulk add: one line per book, "Title" or "Title, Author". Everything else
+// (format, total length, per-book tags) is left blank/null for later editing —
+// status and tags below apply to the whole batch.
+function parseBulkLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  const commaIdx = trimmed.indexOf(",");
+  if (commaIdx === -1) return { title: trimmed, author: "" };
+  return { title: trimmed.slice(0, commaIdx).trim(), author: trimmed.slice(commaIdx + 1).trim() };
+}
+
+async function bulkAddBooks(rawText, statusId, tags) {
+  const lines = rawText.split("\n").map(parseBulkLine).filter((b) => b && b.title);
+  const createdAt = nowIso();
+  for (const line of lines) {
+    await put("books", {
+      id: newId("b"),
+      title: line.title,
+      author: line.author,
+      formatLabel: "",
+      statusId,
+      tags: tags.slice(),
+      totalUnit: null,
+      totalPages: null,
+      totalMinutes: null,
+      targetMinutesOverride: null,
+      createdAt,
+    });
+  }
+  await refreshCache();
+  return lines.length;
+}
+
 async function deleteBook(bookId) {
   await del("books", bookId);
   const segs = cache.segments.filter((s) => s.bookId === bookId);
@@ -528,6 +561,8 @@ function renderSettings() {
   });
 
   $("#settings-default-minutes").value = cache.settings ? cache.settings.defaultSegmentMinutes : 50;
+
+  renderStatusSelectOptions($("#bulk-add-status"), $("#bulk-add-status").value || (cache.statuses[0] && cache.statuses[0].id));
 }
 
 /* ---------------- Misc ---------------- */
@@ -607,6 +642,18 @@ function wireEvents() {
     cache.settings.defaultSegmentMinutes = val;
     await put("meta", cache.settings);
     toast("Default segment length updated.");
+  });
+
+  $("#bulk-add-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = $("#bulk-add-text").value;
+    const statusId = $("#bulk-add-status").value;
+    const tags = $("#bulk-add-tags").value.split(",").map((t) => t.trim()).filter(Boolean);
+    const count = await bulkAddBooks(text, statusId, tags);
+    if (count === 0) { toast("No book titles found — one per line."); return; }
+    $("#bulk-add-form").reset();
+    toast(`Added ${count} book${count === 1 ? "" : "s"}.`);
+    renderLibrary();
   });
 
   $("#btn-export").addEventListener("click", exportData);
