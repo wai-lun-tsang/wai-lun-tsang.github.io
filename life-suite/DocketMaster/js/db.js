@@ -1,7 +1,7 @@
 /* DocketMaster — local data layer (IndexedDB) */
 
 const DB_NAME = "docketmaster-db";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise = null;
 
@@ -44,6 +44,11 @@ function openDB() {
       if (!db.objectStoreNames.contains("learneasySync")) {
         // keyPath "id" = `${moduleId}::${category}` where category is "assessments" | "materials"
         db.createObjectStore("learneasySync", { keyPath: "id" });
+      }
+
+      if (!db.objectStoreNames.contains("ginkgobooksSync")) {
+        // keyPath "bookId" — per-book Never/Auto/Ask, mirroring the ContactPlus pattern
+        db.createObjectStore("ginkgobooksSync", { keyPath: "bookId" });
       }
     };
 

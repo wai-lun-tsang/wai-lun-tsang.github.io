@@ -37,6 +37,16 @@ function wireTaskBubbles(container, onChange) {
       const id = btn.dataset.checkId;
       const task = await DocketDB.get("tasks", id);
       const completing = task.status !== "completed";
+
+      // GinkgoBooks-sourced tasks completing (not un-completing) go through
+      // a manual-edit step instead of an instant toggle, so the actual
+      // reading numbers can be entered and written back per the narrow
+      // contract in GinkgoBooks's schema doc.
+      if (completing && task.sourceApp === "ginkgobooks") {
+        openGinkgoCompleteModal(task, onChange);
+        return;
+      }
+
       await Tasks.completeTask(id, completing);
       const settings = await DocketDB.get("settings", "settings");
       if (completing && settings.completion.stamp) {
@@ -55,9 +65,76 @@ function wireTaskBubbles(container, onChange) {
   });
 }
 
+/** Small dedicated modal for completing a GinkgoBooks-sourced reading task —
+    lets you enter the actual end position and actual minutes (pre-filled
+    with the planned values) rather than silently accepting the estimate,
+    then writes those back to GinkgoBooks's segments record via the one
+    narrow, contract-bound write-back this app is allowed to make. */
+function openGinkgoCompleteModal(task, onChange) {
+  const meta = task.sourceMeta || {};
+  const unitLabel = meta.unit === "duration" ? "minute mark" : "page";
+  const root = document.getElementById("modal-root");
+  root.innerHTML = `
+    <div class="modal-backdrop" id="ginkgoModalBackdrop">
+      <div class="modal-sheet" id="ginkgoModalSheet">
+        <div class="modal-header">
+          <h2>Finish reading segment</h2>
+          <button class="modal-close" id="ginkgoModalCloseBtn" aria-label="Close">✕</button>
+        </div>
+        <p class="view-subtitle" style="margin-top:-4px;">${escapeHtml(meta.bookTitle || task.title)}</p>
+        <p class="hint">Planned: ${unitLabel} ${meta.startPosition ?? "?"} → ${meta.endPositionPlanned ?? "?"}, ~${meta.targetMinutes ?? task.timeEstimateMinutes}m. Enter what actually happened — this writes back to GinkgoBooks.</p>
+
+        <div class="field">
+          <label for="g-endpos">Actual end ${unitLabel}</label>
+          <input type="number" id="g-endpos" value="${meta.endPositionPlanned ?? ""}">
+        </div>
+        <div class="field">
+          <label for="g-minutes">Actual minutes spent</label>
+          <input type="number" id="g-minutes" min="1" value="${meta.targetMinutes ?? task.timeEstimateMinutes}">
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-primary" id="ginkgoSaveBtn">Save &amp; complete</button>
+          <button class="btn btn-ghost" id="ginkgoCancelBtn">Cancel</button>
+        </div>
+      </div>
+    </div>
+  `;
+  const close = () => { root.innerHTML = ""; };
+  document.getElementById("ginkgoModalCloseBtn").onclick = close;
+  document.getElementById("ginkgoCancelBtn").onclick = close;
+  document.getElementById("ginkgoModalBackdrop").addEventListener("click", (e) => {
+    if (e.target.id === "ginkgoModalBackdrop") close();
+  });
+
+  document.getElementById("ginkgoSaveBtn").onclick = async () => {
+    const actualEndPosition = parseFloat(document.getElementById("g-endpos").value);
+    const actualMinutes = parseInt(document.getElementById("g-minutes").value, 10);
+    if (isNaN(actualEndPosition) || isNaN(actualMinutes) || actualMinutes <= 0) {
+      showToast("Enter a valid end position and minutes");
+      return;
+    }
+
+    const result = await Sync.completeGinkgoSegment(task.sourceId, { actualEndPosition, actualMinutes });
+    if (!result.ok) {
+      showToast("Couldn't update GinkgoBooks: " + result.reason);
+      // Still let them complete the DocketMaster task locally even if the
+      // write-back failed (e.g. GinkgoBooks unavailable right now) — don't
+      // trap them with an uncompletable task over a sync hiccup.
+    }
+    await Tasks.completeTask(task.id, true);
+    const settings = await DocketDB.get("settings", "settings");
+    if (settings.completion.sound) beep(1046, 180);
+    close();
+    showToast(result.ok ? "Segment completed & synced to GinkgoBooks" : "Task completed (GinkgoBooks not updated)");
+    onChange();
+  };
+}
+
 /* ---------------- BACKLOG ---------------- */
 async function renderBacklog(root) {
   await runLearnEasySync();
+  await runGinkgoSync();
   const tasks = await Tasks.getBacklogTasks();
   const tags = await tagLookup();
   root.innerHTML = `
@@ -235,6 +312,18 @@ async function runLearnEasySync() {
   }
 }
 
+async function runGinkgoSync() {
+  try {
+    const result = await Sync.syncGinkgoBooks();
+    if (result.autoImported.length > 0) showToast(`Synced ${result.autoImported.length} reading task${result.autoImported.length > 1 ? "s" : ""} from GinkgoBooks`);
+
+    const pending = result.pending.filter(p => !dismissedSyncPrompts.has(`ginkgobooks-${p.item.id}`));
+    if (pending.length > 0) showAskSyncPrompt(pending.map(p => ({ ...p, app: "ginkgobooks" })), null);
+  } catch (err) {
+    console.warn("GinkgoBooks sync attempt failed:", err);
+  }
+}
+
 async function attemptAutoSync(dateStr) {
   try {
     const frithResult = await Sync.syncFrithForDate(dateStr);
@@ -252,6 +341,7 @@ async function attemptAutoSync(dateStr) {
 function pendingKey(p) {
   if (p.app === "frith") return `frith-${p.goal.id}-${p.dateStr}`;
   if (p.app === "contactplus") return `contactplus-${p.keyDate.id}-${p.dateStr}`;
+  if (p.app === "ginkgobooks") return `ginkgobooks-${p.item.id}`;
   return `learneasy-${p.item.id}`;
 }
 function pendingLabel(p) {
@@ -262,6 +352,7 @@ function pendingLabel(p) {
 function pendingSourceName(p) {
   if (p.app === "frith") return "FRITH";
   if (p.app === "contactplus") return "ContactPlus";
+  if (p.app === "ginkgobooks") return "GinkgoBooks";
   return "LearnEasy";
 }
 
@@ -299,6 +390,7 @@ function showAskSyncPrompt(pending, dateStr) {
     const birthdayTag = tags.find(t => t.name.toLowerCase() === "birthdays");
     const assessmentsTag = tags.find(t => t.name.toLowerCase() === "assessments");
     const learningTag = tags.find(t => t.name.toLowerCase() === "core learning");
+    const leisureTag = tags.find(t => t.name.toLowerCase() === "leisure");
 
     for (const idx of checked) {
       const p = pending[idx];
@@ -313,6 +405,15 @@ function showAskSyncPrompt(pending, dateStr) {
         const remaining = Math.max(15, (p.item.timeEstimateMinutes || 30) - (p.item.timeDoneMinutes || 0));
         const ds = p.scheduledDate || null;
         await Tasks.createTask({ title: p.label, timeEstimateMinutes: remaining, status: ds ? "scheduled" : "backlog", scheduledDate: ds, tagId: learningTag?.id || null, sourceApp: "learneasy", sourceId: p.item.id, sourceDate: ds || "unscheduled" });
+      } else if (p.kind === "ginkgobooks-segment") {
+        const seg = p.item, book = p.book;
+        await Tasks.createTask({
+          title: p.label, timeEstimateMinutes: seg.targetMinutes || 30,
+          notes: `Planned: ${book.totalUnit === "duration" ? "minute" : "page"} ${seg.startPosition} → ${seg.endPositionPlanned}`,
+          status: "backlog", tagId: leisureTag?.id || null,
+          sourceApp: "ginkgobooks", sourceId: seg.id, sourceDate: "unscheduled",
+          sourceMeta: { bookId: book.id, bookTitle: book.title, unit: book.totalUnit, startPosition: seg.startPosition, endPositionPlanned: seg.endPositionPlanned, targetMinutes: seg.targetMinutes },
+        });
       }
     }
     pending.forEach(p => dismissedSyncPrompts.add(pendingKey(p)));
@@ -491,6 +592,7 @@ async function renderSettings(root) {
   const frithOk = await Sync.frithAvailable();
   const cpOk = await Sync.contactPlusAvailable();
   const leOk = await Sync.learnEasyAvailable();
+  const gbOk = await Sync.ginkgoAvailable();
 
   root.innerHTML = `
     <h2 class="view-title">Settings</h2>
@@ -544,6 +646,12 @@ async function renderSettings(root) {
       <div class="card"><div class="card-inner" id="learneasySyncBlock"></div>
         <div class="btn-row"><button class="btn btn-sm" id="openLearnEasyImportBtn">Open detailed import screen →</button></div>
       </div>
+    </div>
+
+    <div class="settings-section">
+      <h3>GinkgoBooks sync</h3>
+      <p class="hint" style="margin:-2px 0 10px;">Per book — only the next pending reading segment is pulled in at a time, since they're meant to be done in order. Completing one here writes your actual page/time back to GinkgoBooks.</p>
+      <div class="card"><div class="card-inner" id="gbSyncBlock"></div></div>
     </div>
 
     <div class="settings-section">
@@ -605,6 +713,7 @@ async function renderSettings(root) {
   await renderFrithSyncBlock(frithOk);
   await renderContactPlusSyncBlock(cpOk);
   await renderLearnEasySyncBlock(leOk);
+  await renderGinkgoSyncBlock(gbOk);
 
   document.getElementById("openLearnEasyImportBtn").onclick = () => {
     settingsSubView = "learneasy-import";
@@ -723,6 +832,38 @@ async function renderContactPlusSyncBlock(available) {
     btn.onclick = async () => {
       await DocketDB.put("contactplusSync", { contactId: btn.dataset.contact, mode: btn.dataset.mode });
       renderContactPlusSyncBlock(true);
+    };
+  });
+}
+
+async function renderGinkgoSyncBlock(available) {
+  const block = document.getElementById("gbSyncBlock");
+  if (!available) {
+    block.innerHTML = `<p class="unavailable-note">GinkgoBooks not detected on this origin yet. This activates automatically once DocketMaster and GinkgoBooks are hosted under the same GitHub Pages site. You can still use the manual backup import as a stopgap.</p>`;
+    return;
+  }
+  const data = await Sync.readGinkgoData();
+  const byBook = Sync.groupGinkgoPending(data);
+  const prefs = await DocketDB.getAll("ginkgobooksSync");
+  const prefMap = Object.fromEntries(prefs.map(p => [p.bookId, p.mode]));
+
+  const bookIds = Object.keys(byBook);
+  block.innerHTML = bookIds.map(bookId => {
+    const { book, segments } = byBook[bookId];
+    return `
+      <div class="sync-row">
+        <span class="name">${escapeHtml(book.title)} <span class="muted">(${segments.length} pending segment${segments.length === 1 ? "" : "s"})</span></span>
+        <div class="pill-group">
+          ${["never", "auto", "ask"].map(m => `<button type="button" class="pill btn-sm sync-mode-btn-gb" data-book="${book.id}" data-mode="${m}" style="${((prefMap[book.id] || "never") === m) ? "background:#3E7CB1;color:#fff;border-color:#3E7CB1;" : ""}">${m}</button>`).join("")}
+        </div>
+      </div>
+    `;
+  }).join("") || `<p class="muted">No books with pending segments in GinkgoBooks right now.</p>`;
+
+  block.querySelectorAll(".sync-mode-btn-gb").forEach(btn => {
+    btn.onclick = async () => {
+      await DocketDB.put("ginkgobooksSync", { bookId: btn.dataset.book, mode: btn.dataset.mode });
+      renderGinkgoSyncBlock(true);
     };
   });
 }

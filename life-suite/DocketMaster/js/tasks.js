@@ -23,9 +23,11 @@ function blankTask(overrides = {}) {
     status: "backlog", // "backlog" | "scheduled" | "completed"
     scheduledDate: null, // "YYYY-MM-DD" | null
     seriesId: null,
-    sourceApp: null, // "frith" | "contactplus" | null
+    sourceApp: null, // "frith" | "contactplus" | "learneasy" | "ginkgobooks" | null
     sourceId: null,
     sourceDate: null,
+    sourceMeta: null, // optional extra context a source app's completion flow needs
+    // (e.g. GinkgoBooks: { unit, startPosition, endPositionPlanned, targetMinutes })
     createdAt: new Date().toISOString(),
     completedAt: null,
     ...overrides,

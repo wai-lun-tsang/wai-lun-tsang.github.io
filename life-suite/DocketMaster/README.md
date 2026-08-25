@@ -69,6 +69,12 @@ would help a lot. Specifically worth checking:
   detailed import screen (Settings → LearnEasy Sync → "Open detailed import
   screen") — tick a few individual items, confirm only those get created,
   and that they show as "✓ imported" if you revisit the screen afterward.
+- **GinkgoBooks sync** (once GinkgoBooks exists and both apps are
+  same-origin hosted) — set a book to Auto or Ask, confirm only its *next*
+  pending segment shows up (not the whole backlog of segments at once).
+  Complete it from DocketMaster, enter an actual end position/minutes
+  different from the plan, and confirm the segment shows up in GinkgoBooks
+  as completed with those exact numbers, `completedBy: "docketmaster"`.
 
 If anything looks broken, behaves unexpectedly, or just feels off, let me
 know and I'll fix it.
@@ -133,6 +139,30 @@ honestly rather than glossed over:
 - **True closed-app push notifications are not implemented**, per the spec's
   §13 — only in-app reminders and an "on open" catch-up summary listing
   tasks that were due while the app was closed.
+- **GinkgoBooks is the one integration that writes back**, not just reads —
+  and only in a narrow, deliberately constrained way. Completing a
+  GinkgoBooks-sourced task in DocketMaster opens a small modal asking for
+  the actual end position and actual minutes (pre-filled with the planned
+  values, editable), then updates only that one `segments` record in
+  GinkgoBooks's database — never creating a record, never touching `books`/
+  `statuses`/`meta`, and only ever writing the `"pending" → "completed"`
+  transition, exactly as specified in GinkgoBooks's schema doc §5.
+  **One asymmetry worth knowing:** un-completing a task in DocketMaster
+  (unchecking it after the fact) does *not* revert the segment back to
+  pending in GinkgoBooks — the write-back contract only permits the forward
+  transition, so reversing it there isn't allowed. If you uncheck a
+  GinkgoBooks-sourced task by mistake, DocketMaster and GinkgoBooks will
+  disagree about its status until you manually fix it in GinkgoBooks
+  directly.
+- **GinkgoBooks sync only surfaces the next pending segment per book**, not
+  every pending segment at once — since segments are meant to be read in
+  order, dumping the whole rest of a book into Backlog in one go wouldn't be
+  useful. Finishing one segment (and it syncing back to GinkgoBooks) is what
+  makes the next one eligible to import.
+- **GinkgoBooks segments never get a scheduled date.** Unlike LearnEasy
+  materials (which use `dateEnd` when present), nothing in GinkgoBooks's
+  schema indicates a target day for a reading segment, so these always land
+  in Backlog rather than Day/Week.
 
 ---
 

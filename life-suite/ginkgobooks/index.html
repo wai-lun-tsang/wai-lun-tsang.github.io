@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#D9A62E">
+<title>GinkgoBooks</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Literata:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="app-header">
+  <button class="logo-btn" id="btn-go-library" aria-label="GinkgoBooks — Library">
+    <svg class="logo-icon" viewBox="0 0 52 52" fill="none" aria-hidden="true">
+      <path d="M10 40V14c6 0 10 2 14 6 4-4 8-6 14-6v26c-6 0-10 2-14 6-4-4-8-6-14-6Z" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/>
+      <path d="M24 20v20" stroke="currentColor" stroke-width="1.6"/>
+    </svg>
+    <span class="logo-text">GinkgoBooks</span>
+  </button>
+  <button class="icon-btn" id="btn-go-settings" aria-label="Settings">⚙</button>
+</header>
+
+<main id="app-main">
+
+  <!-- LIBRARY -->
+  <section id="view-library" class="view">
+    <div class="view-toolbar">
+      <h1>Library</h1>
+      <button class="btn btn-primary" id="btn-add-book">+ Add book</button>
+    </div>
+    <div class="filter-row">
+      <select id="filter-status"><option value="">All statuses</option></select>
+      <select id="filter-tag"><option value="">All shelves</option></select>
+    </div>
+    <div id="library-list" class="library-list"></div>
+    <p id="library-empty" class="empty-note hidden">No books yet — add your first one.</p>
+  </section>
+
+  <!-- BOOK FORM (add/edit) -->
+  <section id="view-book-form" class="view hidden">
+    <div class="view-toolbar">
+      <h1 id="book-form-title">Add book</h1>
+    </div>
+    <form id="book-form">
+      <input type="hidden" id="bf-id">
+      <label>Title
+        <input type="text" id="bf-title" required>
+      </label>
+      <label>Author
+        <input type="text" id="bf-author">
+      </label>
+      <label>Format
+        <input type="text" id="bf-format" placeholder="e.g. Physical, Kindle, Audiobook (Audible)">
+      </label>
+      <label>Status
+        <select id="bf-status"></select>
+      </label>
+      <label>Shelves / tags
+        <input type="text" id="bf-tags" placeholder="comma-separated, e.g. Fiction, Book Club">
+      </label>
+
+      <fieldset class="length-fieldset">
+        <legend>Total length</legend>
+        <label class="radio-label"><input type="radio" name="bf-total-unit" value="" checked> Unknown / skip</label>
+        <label class="radio-label"><input type="radio" name="bf-total-unit" value="pages"> Pages
+          <input type="number" id="bf-total-pages" min="1" placeholder="e.g. 512">
+        </label>
+        <label class="radio-label"><input type="radio" name="bf-total-unit" value="duration"> Duration (minutes)
+          <input type="number" id="bf-total-minutes" min="1" placeholder="e.g. 620">
+        </label>
+      </fieldset>
+
+      <label>Segment length override (minutes)
+        <input type="number" id="bf-target-override" min="1" placeholder="leave blank to use the default">
+      </label>
+
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="button" class="btn" id="btn-cancel-book-form">Cancel</button>
+        <button type="button" class="btn btn-danger hidden" id="btn-delete-book">Delete book</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- BOOK DETAIL -->
+  <section id="view-book-detail" class="view hidden">
+    <div class="view-toolbar">
+      <h1 id="bd-title">Book title</h1>
+      <div class="toolbar-actions">
+        <button class="btn" id="btn-edit-book">Edit</button>
+      </div>
+    </div>
+    <p class="bd-author" id="bd-author"></p>
+
+    <div class="bd-meta-row">
+      <label class="inline-label">Status
+        <select id="bd-status"></select>
+      </label>
+      <div class="bd-tags" id="bd-tags"></div>
+    </div>
+
+    <div class="progress-card" id="bd-progress-card">
+      <div class="progress-leaf">
+        <svg viewBox="0 0 52 52" fill="none">
+          <defs><clipPath id="bd-clip"><rect id="bd-clip-rect" x="0" y="46" width="52" height="0"/></clipPath></defs>
+          <path d="M26 46 C 14 42 4 34 4 20 C 4 8 14 2 26 10 C 38 2 48 8 48 20 C 48 34 38 42 26 46 Z" fill="#D9A62E" clip-path="url(#bd-clip)"/>
+          <path d="M26 46 C 14 42 4 34 4 20 C 4 8 14 2 26 10 C 38 2 48 8 48 20 C 48 34 38 42 26 46 Z" fill="none" stroke="#3A2E12" stroke-width="1.6" stroke-linejoin="round"/>
+          <path d="M26 46 L26 10" stroke="#3A2E12" stroke-width="1.2" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="progress-figures" id="bd-progress-figures">—</div>
+    </div>
+
+    <div class="segments-block">
+      <div class="segments-header">
+        <h2>Segments</h2>
+        <button class="btn btn-primary" id="btn-generate-segment">Generate next segment</button>
+      </div>
+      <div id="segments-list"></div>
+    </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="view-settings" class="view hidden">
+    <div class="view-toolbar"><h1>Settings</h1></div>
+
+    <h2>Statuses</h2>
+    <p class="hint">"Terminal" statuses (like Finished or DNF) automatically mark a book's remaining pending segments as done when applied.</p>
+    <div id="statuses-list"></div>
+    <form id="status-add-form" class="inline-form">
+      <input type="text" id="new-status-name" placeholder="New status name" required>
+      <label class="checkbox-label"><input type="checkbox" id="new-status-terminal"> Terminal</label>
+      <button type="submit" class="btn btn-primary">Add</button>
+    </form>
+
+    <h2>Segments</h2>
+    <label>Default segment length (minutes)
+      <input type="number" id="settings-default-minutes" min="1">
+    </label>
+
+    <h2>Backup</h2>
+    <p class="hint">Export saves everything in this app to a JSON file on your device. Import replaces all current data with a previously exported file — use it after reinstalling or updating the app if data was reset.</p>
+    <div class="form-actions">
+      <button class="btn" id="btn-export">Export data</button>
+      <button class="btn" id="btn-import">Import data</button>
+      <input type="file" id="import-file-input" accept="application/json" class="hidden">
+    </div>
+  </section>
+
+</main>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,15 +1,22 @@
-/* DocketMaster — read-only cross-app sync (FRITH / ContactPlus)
+/* DocketMaster — read-only cross-app sync (FRITH / ContactPlus / LearnEasy)
+   plus one narrow, contract-bound write-back to GinkgoBooks.
 
    IMPORTANT SAFETY RULES:
    - We only ever call indexedDB.open(name, 1) — the exact confirmed version
-     of both source databases — and we NEVER attach an onupgradeneeded
+     of every source database — and we NEVER attach an onupgradeneeded
      handler. If a database doesn't exist yet on this origin, opening it
      anyway would silently create an empty one and could stop the real app
      from ever initializing its own schema. So we first check for existence
      via indexedDB.databases() and skip entirely if it's not there or if the
      browser can't tell us (older Safari).
-   - This module never writes to frith-db or contactplus-db. Read-only,
-     always — confirmed as a deliberate product decision.
+   - This module never writes to frith-db, contactplus-db, or learneasy.
+     Read-only, always — confirmed as a deliberate product decision.
+   - GinkgoBooks (ginkgobooks-db) is the one deliberate exception: DocketMaster
+     may update a small fixed set of fields on an EXISTING segments record
+     when the matching task is completed — never create a new record, never
+     touch books/statuses/meta, never write any status transition other than
+     "pending" → "completed". See completeGinkgoSegment() below, which
+     implements that contract exactly and nothing more.
 */
 
 const FRITH_DB = "frith-db";
@@ -18,6 +25,8 @@ const CONTACTPLUS_DB = "contactplus-db";
 const CONTACTPLUS_VERSION = 1;
 const LEARNEASY_DB = "learneasy";
 const LEARNEASY_VERSION = 1;
+const GINKGO_DB = "ginkgobooks-db";
+const GINKGO_VERSION = 1;
 
 async function dbIsPresent(name) {
   if (!indexedDB.databases) return "unknown"; // can't safely check -> treat as unavailable
@@ -57,6 +66,9 @@ async function contactPlusAvailable() {
 }
 async function learnEasyAvailable() {
   return (await dbIsPresent(LEARNEASY_DB)) === "present";
+}
+async function ginkgoAvailable() {
+  return (await dbIsPresent(GINKGO_DB)) === "present";
 }
 
 async function readFrithData() {
@@ -245,6 +257,138 @@ async function syncLearnEasy() {
   return result;
 }
 
+async function readGinkgoData() {
+  const db = await openReadOnly(GINKGO_DB, GINKGO_VERSION);
+  try {
+    const [books, statuses, segments] = await Promise.all([
+      getAllFrom(db, "books"),
+      getAllFrom(db, "statuses"),
+      getAllFrom(db, "segments"),
+    ]);
+    return { books, statuses, segments };
+  } finally {
+    db.close();
+  }
+}
+
+/** Groups pending (not-yet-completed) reading segments by book:
+    { [bookId]: { book, status, segments: [...] } }
+    Segments carry no date of their own — unlike LearnEasy materials, there's
+    no dateEnd to fall back to, so GinkgoBooks imports always land in
+    Backlog, ordered by segment index. */
+function groupGinkgoPending({ books, statuses, segments }) {
+  const statusesById = Object.fromEntries(statuses.map(s => [s.id, s]));
+  const byBook = {};
+  for (const seg of segments) {
+    if (seg.status !== "pending") continue;
+    const book = books.find(b => b.id === seg.bookId);
+    if (!book) continue;
+    if (!byBook[book.id]) byBook[book.id] = { book, status: statusesById[book.statusId] || null, segments: [] };
+    byBook[book.id].segments.push(seg);
+  }
+  for (const bucket of Object.values(byBook)) bucket.segments.sort((a, b) => a.index - b.index);
+  return byBook;
+}
+
+function ginkgoSegmentTitle(book, segment) {
+  const range = `${segment.startPosition}–${segment.endPositionPlanned}`;
+  const unit = book.totalUnit === "duration" ? "min mark" : "p.";
+  return `${book.title} — ${unit} ${range}`;
+}
+
+/** Read-only sync pass (Backlog-only — segments have no target date).
+    Same Never/Auto/Ask pattern as the other integrations, but per-book
+    rather than per-item, since a book can have many pending segments. */
+async function syncGinkgoBooks() {
+  const result = { autoImported: [], pending: [], unavailable: false };
+  if (!(await ginkgoAvailable())) { result.unavailable = true; return result; }
+
+  const data = await readGinkgoData();
+  const byBook = groupGinkgoPending(data);
+  const prefs = await DocketDB.getAll("ginkgobooksSync");
+  const prefMap = Object.fromEntries(prefs.map(p => [p.bookId, p.mode]));
+  const tags = await DocketDB.getAll("tags");
+  const leisureTag = tags.find(t => t.name.toLowerCase() === "leisure");
+
+  for (const bookId in byBook) {
+    const { book, segments } = byBook[bookId];
+    const mode = prefMap[bookId] || "never";
+    if (mode === "never") continue;
+
+    // Only the next unimported segment at a time — importing every pending
+    // segment for a book at once would dump the whole rest of the book into
+    // Backlog in one go, which isn't useful since they're meant to be done
+    // in order anyway.
+    for (const seg of segments) {
+      if (await findExistingBySourceAppAndId("ginkgobooks", seg.id)) continue; // already imported earlier
+
+      if (mode === "auto") {
+        const task = await Tasks.createTask({
+          title: ginkgoSegmentTitle(book, seg), timeEstimateMinutes: seg.targetMinutes || 30,
+          notes: `Planned: ${book.totalUnit === "duration" ? "minute" : "page"} ${seg.startPosition} → ${seg.endPositionPlanned}`,
+          status: "backlog", tagId: leisureTag?.id || null,
+          sourceApp: "ginkgobooks", sourceId: seg.id, sourceDate: "unscheduled",
+          sourceMeta: { bookId: book.id, bookTitle: book.title, unit: book.totalUnit, startPosition: seg.startPosition, endPositionPlanned: seg.endPositionPlanned, targetMinutes: seg.targetMinutes },
+        });
+        result.autoImported.push(task);
+      } else if (mode === "ask") {
+        result.pending.push({ kind: "ginkgobooks-segment", book, item: seg, label: ginkgoSegmentTitle(book, seg) });
+      }
+      break; // only ever surface the next segment per book per pass
+    }
+  }
+  return result;
+}
+
+/** The ONE narrow write-back this app is permitted to make into another
+    app's database. Implements §5 of GinkgoBooks's schema doc exactly:
+    - matches an EXISTING segments record by id (never creates one)
+    - only ever writes actualEndPosition, actualMinutes, completedAt, status,
+      completedBy
+    - only allows the "pending" → "completed" transition
+    - never touches books, statuses, or meta
+    Returns { ok: true } or { ok: false, reason } — never throws for an
+    expected refusal (e.g. segment already completed), so callers can show a
+    clean message instead of a crash. */
+async function completeGinkgoSegment(segmentId, { actualEndPosition, actualMinutes }) {
+  if (!(await ginkgoAvailable())) return { ok: false, reason: "GinkgoBooks not available on this origin." };
+
+  const db = await new Promise((resolve, reject) => {
+    const req = indexedDB.open(GINKGO_DB, GINKGO_VERSION); // no onupgradeneeded — see file header
+    req.onsuccess = (e) => resolve(e.target.result);
+    req.onerror = (e) => reject(e.target.error);
+    req.onblocked = () => reject(new Error("ginkgobooks-db open blocked"));
+  });
+
+  try {
+    return await new Promise((resolve, reject) => {
+      const t = db.transaction("segments", "readwrite");
+      const store = t.objectStore("segments");
+      const getReq = store.get(segmentId);
+      getReq.onsuccess = () => {
+        const existing = getReq.result;
+        if (!existing) { resolve({ ok: false, reason: "Segment no longer exists in GinkgoBooks." }); return; }
+        if (existing.status !== "pending") { resolve({ ok: false, reason: `Segment is already "${existing.status}" in GinkgoBooks — not overwriting.` }); return; }
+
+        const updated = {
+          ...existing,
+          actualEndPosition, actualMinutes,
+          completedAt: new Date().toISOString(),
+          status: "completed",
+          completedBy: "docketmaster",
+        };
+        const putReq = store.put(updated);
+        putReq.onsuccess = () => resolve({ ok: true });
+        putReq.onerror = () => reject(putReq.error);
+      };
+      getReq.onerror = () => reject(getReq.error);
+      t.onerror = () => reject(t.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
 async function alreadyImported(sourceApp, sourceId, sourceDate) {
   const matches = await DocketDB.getByIndex("tasks", "source", [sourceApp, sourceId, sourceDate]);
   return matches.length > 0;
@@ -331,9 +475,10 @@ async function syncContactPlusForDate(dateStr) {
 }
 
 window.Sync = {
-  frithAvailable, contactPlusAvailable, learnEasyAvailable,
-  readFrithData, readContactPlusData, readLearnEasyData,
-  syncFrithForDate, syncContactPlusForDate, syncLearnEasy,
+  frithAvailable, contactPlusAvailable, learnEasyAvailable, ginkgoAvailable,
+  readFrithData, readContactPlusData, readLearnEasyData, readGinkgoData,
+  syncFrithForDate, syncContactPlusForDate, syncLearnEasy, syncGinkgoBooks,
+  completeGinkgoSegment, groupGinkgoPending,
   alreadyImported, findExistingBySourceAppAndId,
   groupLearnEasyImportables, computeEffectiveDeadline, toDateStr,
 };
