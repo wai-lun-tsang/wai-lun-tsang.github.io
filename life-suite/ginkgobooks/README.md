@@ -27,6 +27,27 @@ see the spec doc for the reasoning. DocketMaster write-back (segments being comp
 automatically when you finish the corresponding task in DocketMaster) is designed into
 the schema but not wired up yet, since DocketMaster's side doesn't exist yet.
 
+## If you've tested a previous version and updates aren't showing up
+
+Earlier builds had a service-worker bug: `sw.js` itself never changed between
+updates, and browsers only check for service-worker updates by comparing that
+file's bytes — so an already-installed copy could keep serving an old, cached
+version of `app.js`/`index.html` indefinitely, even after you replaced the files
+on disk or redeployed. This is fixed going forward (the worker now fetches
+network-first and its own version string gets bumped on every release), but if
+you're stuck on a stale version from before this fix, clear it once manually:
+
+- **Chrome/Edge:** DevTools → Application tab → Service Workers → "Unregister,"
+  then Application → Storage → "Clear site data." Reload.
+- **Firefox:** `about:debugging#/runtime/this-firefox` → find the app → "Unregister."
+- **Any browser, simplest option:** open the app in a new private/incognito window,
+  which has no old service worker to contend with, to confirm the fix works there.
+- On mobile, if you added it to your home screen, remove and re-add it after
+  clearing site data in the browser.
+
+This only clears the cached *app shell* — your IndexedDB data (books, segments,
+etc.) is untouched by any of the above.
+
 ## Testing locally
 
 Browsers block IndexedDB and service workers on `file://` pages, so you need a local

@@ -1,4 +1,8 @@
-const CACHE_NAME = "ginkgobooks-shell-v1";
+// Bump this on every release so the service worker script's bytes change —
+// browsers only check for SW updates by diffing this file, so an unchanged
+// sw.js (even if app.js/index.html changed) means updates are silently ignored.
+const SW_VERSION = "v2";
+const CACHE_NAME = `ginkgobooks-shell-${SW_VERSION}`;
 const SHELL_FILES = [
   "./",
   "./index.html",
@@ -25,8 +29,9 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Cache-first for the app shell; network for everything else (e.g. Google Fonts),
-// falling back to cache if offline. Never intercepts anything beyond this origin's shell.
+// Network-first for this origin's shell files: while you're actively developing,
+// "always try to get the latest version, fall back to cache only if offline" is far
+// safer than cache-first, which can silently strand you on an old build indefinitely.
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
@@ -34,7 +39,13 @@ self.addEventListener("fetch", (event) => {
 
   if (isShellFile) {
     event.respondWith(
-      caches.match(event.request).then((cached) => cached || fetch(event.request))
+      fetch(event.request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          return response;
+        })
+        .catch(() => caches.match(event.request))
     );
   } else {
     event.respondWith(
