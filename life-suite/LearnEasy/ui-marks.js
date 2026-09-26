@@ -63,7 +63,7 @@ LE.renderMarks = async function (container) {
       const inclusiveList = strictList.concat(fullYearModules.map(m => ({ id: m.id, credit: m.creditValue || 15, assessments: assessmentsByModule[m.id] || [] })));
       const tf = LE.termFigures(strictList, inclusiveList, settings);
 
-      html += `<div class="le-section" style="padding-top:8px"><p class="le-sub" style="margin-bottom:8px"><strong style="color:var(--text)">${LE.escapeHtml(term.name)}</strong></p></div>`;
+      html += `<div class="le-section" style="padding-top:8px"><p class="le-sub" style="margin-bottom:8px"><strong style="color:var(--text)">${LE.escapeHtml(term.name)}${term.examPeriod ? ' (exam period)' : ''}</strong></p></div>`;
       html += `<div class="le-marks-cols two">
         <div class="le-stat-card">
           <h3>Strict (this term only)</h3>
@@ -78,10 +78,12 @@ LE.renderMarks = async function (container) {
       </div>`;
 
       html += `<div class="le-list" style="padding-top:0">`;
-      if (termModules.length === 0) html += `<p class="le-hint" style="padding:0 0 8px">No modules under this term yet.</p>`;
+      if (termModules.length === 0 && !term.examPeriod) html += `<p class="le-hint" style="padding:0 0 8px">No modules under this term yet.</p>`;
       termModules.forEach(m => { html += LE.renderModuleBlock(m, assessmentsByModule[m.id] || [], settings); });
       html += `</div>`;
-      if (yearCreditTotal >= LE.YEAR_CREDIT_CAP) {
+      if (term.examPeriod) {
+        html += `<p class="le-hint" style="padding:0 18px 8px">Exam period — no modules are taught here. Its figures above reflect this year's full-year modules only. Assessments from other terms can still be tagged with this as their home term.</p>`;
+      } else if (yearCreditTotal >= LE.YEAR_CREDIT_CAP) {
         html += `<p class="le-hint" style="padding:0 18px 8px">This year is already at ${yearCreditTotal} of ${LE.YEAR_CREDIT_CAP} credits — no more modules can be added.</p>`;
       } else {
         html += `<div class="le-fab-row"><button class="le-btn secondary small" onclick="LE.openNodeForm('module', null, '${term.id}')"><i class="ti ti-plus"></i> Add module</button></div>`;
@@ -190,7 +192,7 @@ LE.openAssessmentForm = async function (assessmentId, moduleId) {
   const module = allNodes.find(n => n.id === moduleId);
   const parent = allNodes.find(n => n.id === module.parentId);
   const year = parent.type === 'year' ? parent : allNodes.find(n => n.id === parent.parentId);
-  const yearTerms = allNodes.filter(n => n.type === 'term' && n.parentId === year.id);
+  const yearTerms = allNodes.filter(n => n.type === 'term' && n.parentId === year.id).sort((a, b) => (a.order || 0) - (b.order || 0));
   const defaultHomeTerm = parent.type === 'term' ? parent.id : (yearTerms[0] && yearTerms[0].id);
 
   const format = existing?.assessmentFormat || 'coursework';
@@ -212,7 +214,7 @@ LE.openAssessmentForm = async function (assessmentId, moduleId) {
         <p class="le-hint">Needed to compute a percentage-based extension for a timed exam.</p>
       </div>
       <div class="le-field"><label>Home term (for term views)</label>
-        <select id="a-homeTerm">${yearTerms.map(t => `<option value="${t.id}" ${(existing?.homeTermId || defaultHomeTerm) === t.id ? 'selected' : ''}>${LE.escapeHtml(t.name)}</option>`).join('')}</select>
+        <select id="a-homeTerm">${yearTerms.map(t => `<option value="${t.id}" ${(existing?.homeTermId || defaultHomeTerm) === t.id ? 'selected' : ''}>${LE.escapeHtml(t.name)}${t.examPeriod ? ' (exam period)' : ''}</option>`).join('')}</select>
       </div>
       <div class="le-field-row">
         <div class="le-field"><label>Deadline</label><input type="datetime-local" id="a-deadline" value="${LE.toLocalDatetimeValue(existing?.deadline)}"></div>

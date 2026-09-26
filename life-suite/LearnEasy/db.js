@@ -116,11 +116,13 @@ LE.saveSettings = (s) => LE.dbPut('settings', { ...s, key: 'app' });
 
 // ---- seed: root Degree node + Year 1-3 / Term 1-2 skeleton, only if DB is empty ----
 // One-off cleanup for databases seeded by an earlier version that still included Term 3
-// (UCL's Term 3 is exam period only, never a taught term). Cascades to any modules/
-// chunks/materials/assessments that had been created under a stray Term 3.
+// as a full teaching term (UCL's Term 3 is exam period only, never a taught term).
+// Only targets LEGACY Term 3 nodes (no examPeriod flag) — leaves the intentional
+// exam-period Term 3 (added below) alone. Cascades to any modules/chunks/materials/
+// assessments that had been created under a stray legacy Term 3.
 LE.migrateRemoveTerm3 = async function () {
   const allNodes = await LE.getAllNodes();
-  const term3s = allNodes.filter(n => n.type === 'term' && n.name === 'Term 3');
+  const term3s = allNodes.filter(n => n.type === 'term' && n.name === 'Term 3' && !n.examPeriod);
   for (const t of term3s) {
     const orphanModules = allNodes.filter(n => n.type === 'module' && n.parentId === t.id);
     for (const m of orphanModules) {
@@ -131,8 +133,24 @@ LE.migrateRemoveTerm3 = async function () {
   }
 };
 
+// Ensures every Year has an exam-period Term 3 (for assessments to be homed against),
+// even for Years created before this feature existed. No-op if already present.
+LE.ensureExamPeriodTerms = async function () {
+  const allNodes = await LE.getAllNodes();
+  const years = allNodes.filter(n => n.type === 'year');
+  for (const year of years) {
+    const hasExamTerm3 = allNodes.some(n => n.type === 'term' && n.parentId === year.id && n.examPeriod);
+    if (!hasExamTerm3) {
+      await LE.saveNode({
+        id: LE.uuid(), type: 'term', parentId: year.id, name: 'Term 3', order: 2, examPeriod: true,
+        dateStart: null, dateEnd: null, timeEstimateMinutes: 0, timeDoneMinutes: 0, progressPct: 0, colorOverride: null,
+      });
+    }
+  }
+};
+
 LE.YEAR_NAMES = { 1: 'Year 1', 2: 'Year 2', 3: 'Year 3', 4: 'Year 4' };
-LE.TERM_NAMES = ['Term 1', 'Term 2']; // Term 3 doesn't teach — exam period only, not a taught term
+LE.TERM_NAMES = ['Term 1', 'Term 2']; // taught terms; Term 3 (exam period) is added separately, see createYear
 
 let _seedPromise = null;
 LE.seedIfEmpty = function () {
@@ -199,5 +217,9 @@ LE.createYear = async (degreeId, yearNumber) => {
       dateStart: null, dateEnd: null, timeEstimateMinutes: 0, timeDoneMinutes: 0, progressPct: 0, colorOverride: null,
     });
   }
+  await LE.saveNode({
+    id: LE.uuid(), type: 'term', parentId: yearId, name: 'Term 3', order: 2, examPeriod: true,
+    dateStart: null, dateEnd: null, timeEstimateMinutes: 0, timeDoneMinutes: 0, progressPct: 0, colorOverride: null,
+  });
   return LE.getNode(yearId);
 };

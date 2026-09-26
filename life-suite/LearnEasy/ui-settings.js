@@ -12,6 +12,7 @@ LE.renderSettings = async function (container) {
     const node = nodesById[nodeId];
     if (!node) return '';
     if (node.type === 'year' && !visibleYearIds.has(node.id)) return ''; // hidden Year 4 under BSc — data kept, just not selectable
+    if (node.type === 'term' && node.examPeriod) return ''; // Term 3 has nothing to browse into, not a useful default landing page
     let out = `<option value="${node.id}" ${settings.defaultStartNodeId === node.id ? 'selected' : ''}>${'—'.repeat(depth)} ${LE.escapeHtml(node.name)}</option>`;
     const kids = (childrenByParent[node.id] || []);
     kids.forEach(k => { out += depthOptions(k.id, depth + 1); });

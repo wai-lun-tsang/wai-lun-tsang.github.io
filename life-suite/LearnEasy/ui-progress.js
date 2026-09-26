@@ -46,6 +46,9 @@ LE.renderProgress = async function (container) {
   if (node.type === 'degree') {
     kids = LE.visibleYears(kids, settings.programmeRoute);
   }
+  if (node.type === 'year') {
+    kids = kids.filter(k => !(k.type === 'term' && k.examPeriod)); // Term 3 is exam period only — not a teaching term to browse into
+  }
   const rollup = LE.rollupNode(currentId, nodesById, childrenByParent);
   const countdown = LE.countdownLabel(node.dateStart, node.dateEnd);
   const ended = countdown && countdown.startsWith('ended');
@@ -92,6 +95,10 @@ LE.renderProgress = async function (container) {
   }
 
   let addTypes = LE.CHILD_TYPES[node.type] || [];
+  if (node.type === 'term' && node.examPeriod) {
+    addTypes = []; // Term 3 is exam period only — no modules are taught there
+    html += `<p class="le-hint" style="padding:0 18px">Exam period — no modules are taught here. Assessments from other terms can still be tagged with this as their home term.</p>`;
+  }
   if (addTypes.includes('module')) {
     const yearId = node.type === 'year' ? node.id : (node.type === 'term' ? node.parentId : null);
     if (yearId != null) {

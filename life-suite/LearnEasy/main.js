@@ -34,6 +34,19 @@ function showFatalError(err) {
   }
 }
 
+let _initPromise = null;
+LE.initApp = function () {
+  if (_initPromise) return _initPromise; // guards the whole startup sequence against any duplicate invocation
+  _initPromise = (async () => {
+    await LE.openDB();
+    await LE.seedIfEmpty();
+    await LE.migrateRemoveTerm3();
+    await LE.ensureExamPeriodTerms();
+    await LE.render();
+  })();
+  return _initPromise;
+};
+
 window.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.le-tab').forEach(btn => {
     btn.addEventListener('click', () => LE.switchTab(btn.dataset.tab));
@@ -41,16 +54,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const settingsShortcut = document.getElementById('le-settings-shortcut');
   if (settingsShortcut) settingsShortcut.addEventListener('click', () => LE.switchTab('settings'));
 
-  (async () => {
-    try {
-      await LE.openDB();
-      await LE.seedIfEmpty();
-      await LE.migrateRemoveTerm3();
-      await LE.render();
-    } catch (err) {
-      showFatalError(err);
-    }
-  })();
+  LE.initApp().catch(showFatalError);
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
