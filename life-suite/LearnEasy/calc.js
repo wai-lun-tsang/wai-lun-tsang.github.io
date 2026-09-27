@@ -220,22 +220,24 @@ LE.moduleFigures = function (assessments, settings) {
   return { completedOnly, allAssessments };
 };
 
-// Term-level: strict (this term's own modules only) vs inclusive (+ full-year modules of the parent year).
-// Both lists are arrays of {id, name, credit, assessments}.
-LE.termFigures = function (strictList, inclusiveList, settings) {
-  function aggregate(list) {
-    let sumCreditsC = 0, sumWeightedC = 0, sumCreditsA = 0, sumWeightedA = 0;
-    for (const m of list) {
-      const fig = LE.moduleFigures(m.assessments, settings);
-      if (fig.completedOnly != null) { sumCreditsC += m.credit; sumWeightedC += fig.completedOnly * m.credit; }
-      sumCreditsA += m.credit; sumWeightedA += fig.allAssessments * m.credit;
-    }
-    return {
-      completedOnly: sumCreditsC > 0 ? sumWeightedC / sumCreditsC : null,
-      allAssessments: sumCreditsA > 0 ? sumWeightedA / sumCreditsA : null,
-    };
+// Term-level: figures for whichever assessments are allocated to this term via
+// their own homeTermId — regardless of which module (or which term) they structurally
+// live under. Since assessments can come from different modules, each with its own
+// independent 100%-weight scale, this is an unweighted mean of each assessment's own
+// obtained % (not a weighted roll-up like module/year figures).
+LE.termAssessmentFigures = function (assessments, settings) {
+  if (!assessments.length) return { completedOnly: null, allAssessments: null, count: 0 };
+  let sumCompleted = 0, countCompleted = 0, sumAll = 0;
+  for (const a of assessments) {
+    const af = LE.assessmentFigures(a, settings);
+    if (af.obtainedPct != null) { sumCompleted += af.obtainedPct; countCompleted++; }
+    sumAll += af.obtainedPct != null ? af.obtainedPct : 0;
   }
-  return { strict: aggregate(strictList), inclusive: aggregate(inclusiveList) };
+  return {
+    completedOnly: countCompleted > 0 ? sumCompleted / countCompleted : null,
+    allAssessments: sumAll / assessments.length,
+    count: assessments.length,
+  };
 };
 
 // Year-level: PYM (no drops) vs CYM (best-90-of-120 style drop for non-final years)

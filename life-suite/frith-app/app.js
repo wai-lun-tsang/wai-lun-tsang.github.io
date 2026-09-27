@@ -46,7 +46,19 @@ let MILESTONES = [];
 async function loadAll(){
   SETTINGS = await idbGet("meta","settings") || {...DEFAULT_SETTINGS};
   GOALS = await idbGetAll("goals");
+  await ensureGoalOrder();
+  GOALS.sort((a,b)=> (a.order??0) - (b.order??0));
   MILESTONES = await idbGetAll("milestones");
+}
+async function ensureGoalOrder(){
+  const missing = GOALS.some(g=> g.order===undefined || g.order===null);
+  if(!missing) return;
+  for(let i=0;i<GOALS.length;i++){
+    if(GOALS[i].order===undefined || GOALS[i].order===null){
+      GOALS[i].order = i;
+      await idbPut("goals", GOALS[i]);
+    }
+  }
 }
 async function saveSettings(){ await idbPut("meta", SETTINGS); }
 
@@ -197,21 +209,44 @@ async function getEntry(dateStr){
 }
 async function saveEntry(entry){ await idbPut("entries", entry); }
 
-function checklistComplete(entry, eligible){
-  if(eligible.length===0) return true; // nothing eligible = vacuously fine, but doesn't itself grant a "hit" day (handled in scoring)
-  return eligible.every(g => entry.checklist && entry.checklist[g.id]);
-}
 function requiredFilled(entry){
   return !!(entry.win && entry.gratitude && entry.learn && entry.fix && entry.photo);
 }
-function dayCounts(entry, eligible){
-  // "counts" toward streak/progress: submitted, required fields filled, checklist all-or-nothing satisfied,
-  // and (not late OR late-but-explain-checked)
-  if(entry.status !== "submitted") return false;
-  if(!requiredFilled(entry)) return false;
-  if(eligible.length>0 && !checklistComplete(entry, eligible)) return false;
-  if(entry.wasLate && !entry.explainCountStreak) return false;
-  return true;
+
+/* ---------- chronological day-by-day evaluation (handles percentage-mode goals correctly) ---------- */
+async function computeDayResults(start, hi){
+  const results = {};
+  if(hi < start) return results;
+  const entries = await allEntriesInRange(start, hi);
+  const emap = {}; entries.forEach(e=> emap[e.date]=e);
+  const percentTallies = {}; // goalId -> {hits, eligible}, built up in chronological order
+  let d = start;
+  while(d<=hi){
+    const elig = eligibleGoalsFor(d);
+    const entry = emap[d];
+    let checklistOk = true;
+    for(const g of elig){
+      const checked = !!(entry && entry.checklist && entry.checklist[g.id]);
+      if(g.percentageMode){
+        if(!percentTallies[g.id]) percentTallies[g.id] = {hits:0, eligible:0};
+        const t = percentTallies[g.id];
+        t.eligible++;
+        if(checked) t.hits++;
+        const pct = (t.hits/t.eligible)*100;
+        if(pct < (g.targetPercentage||80)) checklistOk = false;
+      } else if(!checked){
+        checklistOk = false;
+      }
+    }
+    const complete = !!entry && requiredFilled(entry) && checklistOk;
+    let counts = false;
+    if(entry && entry.status==="submitted" && complete && !(entry.wasLate && !entry.explainCountStreak)){
+      counts = true;
+    }
+    results[d] = {complete, counts, entry};
+    d = addDays(d,1);
+  }
+  return results;
 }
 
 /* ---------- streak / stats calculations ---------- */
@@ -223,40 +258,30 @@ async function computeStreaks(){
   const start = SETTINGS.startDate, end = SETTINGS.endDate, today = todayStr();
   const hi = today < end ? today : end;
   if(hi < start) return {current:0, best:0};
-  const entries = await allEntriesInRange(start, hi);
-  const map = {}; entries.forEach(e=> map[e.date]=e);
-  let best=0, run=0, current=0;
+  const results = await computeDayResults(start, hi);
+  let best=0, run=0;
   let d = start;
-  const cutoff = hi;
-  const seq = [];
-  while(d<=cutoff){ seq.push(d); d = addDays(d,1); }
-  for(const ds of seq){
-    const e = map[ds];
-    const elig = eligibleGoalsFor(ds);
-    const hit = e ? dayCounts(e, elig) : false;
+  while(d<=hi){
+    const hit = results[d] ? results[d].counts : false;
     if(hit){ run++; best=Math.max(best,run); } else { run=0; }
+    d = addDays(d,1);
   }
-  // current streak = trailing run ending at the latest day that has a decided outcome
-  // if today isn't submitted yet, don't break the streak on today; start counting from yesterday
-  let d2 = today <= end ? today : end;
-  if(!map[d2] || !dayCounts(map[d2], eligibleGoalsFor(d2))){
+  let d2 = hi;
+  if(!results[d2] || !results[d2].counts){
     d2 = addDays(d2,-1);
   }
   let c=0;
   while(d2>=start){
-    const e = map[d2];
-    const elig = eligibleGoalsFor(d2);
-    if(e && dayCounts(e,elig)){ c++; d2=addDays(d2,-1); } else break;
+    if(results[d2] && results[d2].counts){ c++; d2=addDays(d2,-1); } else break;
   }
-  current = c;
-  return {current, best};
+  return {current:c, best};
 }
 async function computeGoalStats(){
   const start = SETTINGS.startDate, end = SETTINGS.endDate, today = todayStr();
   const hi = today < end ? today : end;
   const entries = await allEntriesInRange(start, hi);
   const map = {}; entries.forEach(e=> map[e.date]=e);
-  const stats = {}; GOALS.filter(g=>g.mode!=="quota").forEach(g=> stats[g.id] = {name:g.name, eligible:0, hit:0});
+  const stats = {}; GOALS.filter(g=>g.mode!=="quota").forEach(g=> stats[g.id] = {name:g.name, eligible:0, hit:0, percentageMode:!!g.percentageMode, targetPercentage:g.targetPercentage||80});
   let d = start;
   while(d<=hi){
     const elig = eligibleGoalsFor(d);
@@ -273,10 +298,10 @@ async function computeConsistency(){
   const start = SETTINGS.startDate, end = SETTINGS.endDate, today = todayStr();
   const hi = today < end ? today : end;
   if(hi<start) return {logged:0, elapsed:0, pct:0};
-  const entries = await allEntriesInRange(start, hi);
+  const results = await computeDayResults(start, hi);
   let logged=0;
   const elapsed = daysBetween(start,hi)+1;
-  for(const e of entries){ if(dayCounts(e, eligibleGoalsFor(e.date))) logged++; }
+  Object.values(results).forEach(r=>{ if(r.counts) logged++; });
   return {logged, elapsed, pct: elapsed? Math.round((logged/elapsed)*100):0};
 }
 
@@ -345,15 +370,14 @@ async function renderMenu(){
   }
 
   // build hit-overlay + milestone marks for the bar (sampled, capped for perf)
-  const entries = await allEntriesInRange(SETTINGS.startDate, today<SETTINGS.endDate?today:SETTINGS.endDate);
-  const map = {}; entries.forEach(e=>map[e.date]=e);
+  const barHi = today<SETTINGS.endDate?today:SETTINGS.endDate;
+  const barResults = await computeDayResults(SETTINGS.startDate, barHi);
   let hitSegs = "";
   {
     let d = SETTINGS.startDate; let segStart=null;
-    const hi = today<SETTINGS.endDate?today:SETTINGS.endDate;
+    const hi = barHi;
     while(d<=hi){
-      const e = map[d];
-      const hit = e ? dayCounts(e, eligibleGoalsFor(d)) : false;
+      const hit = barResults[d] ? barResults[d].counts : false;
       if(hit && segStart===null) segStart=d;
       if(!hit && segStart!==null){
         hitSegs += barSeg(segStart, addDays(d,-1), totalDays);
@@ -686,12 +710,12 @@ async function handleSubmit(dateStr, eligible, late){
 }
 
 /* ---------- HISTORY PAGE ---------- */
-async function dayColor(dateStr, today, entry){
+function dayColor(dateStr, today, dayResult){
   if(dateStr > today) return "gray";
+  const entry = dayResult && dayResult.entry;
   if(!entry) return dateStr < today ? "red" : "gray";
   if(entry.status !== "submitted") return dateStr < today ? "red" : "gray";
-  const eligible = eligibleGoalsFor(dateStr);
-  const complete = requiredFilled(entry) && checklistComplete(entry, eligible);
+  const complete = dayResult.complete;
   if(entry.wasLate && !entry.explainCountStreak) return "gray";
   if(entry.wasLate) return complete ? "blue" : "gray";
   return complete ? "green" : "gray";
@@ -699,14 +723,14 @@ async function dayColor(dateStr, today, entry){
 
 async function renderHistory(){
   const today = todayStr();
-  const entries = await allEntriesInRange(SETTINGS.startDate, SETTINGS.endDate);
-  const map = {}; entries.forEach(e=> map[e.date]=e);
+  const resultsHi = today < SETTINGS.endDate ? today : SETTINGS.endDate;
+  const results = await computeDayResults(SETTINGS.startDate, resultsHi);
 
   const monthsHtml = [];
   let cursor = firstOfMonth(SETTINGS.startDate);
   const endMonth = firstOfMonth(SETTINGS.endDate);
   while(cursor <= endMonth){
-    monthsHtml.push(await renderMonth(cursor, map, today));
+    monthsHtml.push(renderMonth(cursor, results, today));
     cursor = addMonths(cursor,1);
   }
 
@@ -747,7 +771,7 @@ function addMonths(dateStr, n){
 }
 function daysInMonth(dateStr){ const [y,m]=dateStr.split("-").map(Number); return new Date(Date.UTC(y,m,0)).getUTCDate(); }
 
-async function renderMonth(monthStart, map, today){
+function renderMonth(monthStart, results, today){
   const [y,m] = monthStart.split("-").map(Number);
   const dim = daysInMonth(monthStart);
   const firstWd = weekdayOf(monthStart); // 0=Sun
@@ -761,7 +785,7 @@ async function renderMonth(monthStart, map, today){
       cells += `<div class="cal-cell empty"></div>`;
       continue;
     }
-    const color = await dayColor(ds, today, map[ds]);
+    const color = dayColor(ds, today, results[ds]);
     const isFuture = ds > today;
     cells += isFuture
       ? `<div class="cal-cell ${color}">${day}</div>`
@@ -814,8 +838,8 @@ async function renderStats(){
       Object.values(goalStats).map(g=>{
         const rate = g.eligible? Math.round((g.hit/g.eligible)*100):0;
         return `<div class="goal-stat">
-          <div class="top"><span>${escapeHtml(g.name)}</span><span>${g.hit}/${g.eligible} (${rate}%)</span></div>
-          <div class="track"><div class="fill" style="width:${rate}%"></div></div>
+          <div class="top"><span>${escapeHtml(g.name)}${g.percentageMode?` <span style="opacity:0.6;font-size:11px;">(target ${g.targetPercentage}%)</span>`:""}</span><span>${g.hit}/${g.eligible} (${rate}%)</span></div>
+          <div class="track"><div class="fill" style="width:${rate}%;${g.percentageMode && rate<g.targetPercentage ? 'background:var(--red);' : ''}"></div></div>
         </div>`;
       }).join("")}
     ${quotaStatsList.length>0 ? `
@@ -963,13 +987,19 @@ function goalDesc(g){
 function renderGoalsList(){
   const el = document.getElementById("goalsList");
   if(GOALS.length===0){ el.innerHTML = `<div class="empty-note">No goals yet.</div>`; return; }
-  el.innerHTML = GOALS.map(g=>`
+  el.innerHTML = GOALS.map((g,i)=>`
     <div class="goal-card">
       <div class="head"><b>${escapeHtml(g.name)}</b>
-        <span><button class="small-btn" data-edit-goal="${g.id}">edit</button><button class="small-btn" data-del-goal="${g.id}">delete</button></span>
+        <span>
+          <button class="small-btn" data-move-goal-up="${g.id}" ${i===0?"disabled":""}>&uarr;</button>
+          <button class="small-btn" data-move-goal-down="${g.id}" ${i===GOALS.length-1?"disabled":""}>&darr;</button>
+          <button class="small-btn" data-edit-goal="${g.id}">edit</button><button class="small-btn" data-del-goal="${g.id}">delete</button>
+        </span>
       </div>
-      <div class="empty-note">${goalDesc(g)}</div>
+      <div class="empty-note">${goalDesc(g)}${g.percentageMode?` \u00b7 percentage mode (target ${g.targetPercentage||80}%)`:""}</div>
     </div>`).join("");
+  el.querySelectorAll("[data-move-goal-up]").forEach(b=> b.onclick=()=> reorderGoal(b.dataset.moveGoalUp, -1));
+  el.querySelectorAll("[data-move-goal-down]").forEach(b=> b.onclick=()=> reorderGoal(b.dataset.moveGoalDown, 1));
   el.querySelectorAll("[data-edit-goal]").forEach(b=> b.onclick=()=> openGoalEditor(GOALS.find(g=>g.id===b.dataset.editGoal)));
   el.querySelectorAll("[data-del-goal]").forEach(b=> b.onclick=async ()=>{
     if(!confirm("Delete this goal? Past checklist history referencing it will remain but it will no longer appear.")) return;
@@ -977,6 +1007,16 @@ function renderGoalsList(){
     GOALS = GOALS.filter(g=>g.id!==b.dataset.delGoal);
     renderGoalsList();
   });
+}
+async function reorderGoal(id, dir){
+  const idx = GOALS.findIndex(g=>g.id===id);
+  const swapIdx = idx+dir;
+  if(swapIdx<0 || swapIdx>=GOALS.length) return;
+  const a = GOALS[idx], b = GOALS[swapIdx];
+  const tmp = a.order ?? idx; a.order = b.order ?? swapIdx; b.order = tmp;
+  await idbPut("goals", a); await idbPut("goals", b);
+  GOALS.sort((x,y)=> (x.order??0)-(y.order??0));
+  renderGoalsList();
 }
 function msDesc(m){
   if(m.mode==="range") return `${m.startDate} \u2192 ${m.endDate}`;
@@ -1002,7 +1042,7 @@ function renderMilestonesList(){
 }
 
 function openGoalEditor(existing){
-  const g = existing || {id:uid(), name:"", mode:"weekday", weekday:1, intervalWeeks:1, intervalDays:1, startDate:SETTINGS.startDate, endDate:SETTINGS.endDate, dates:[], periodStart:SETTINGS.startDate, periodEnd:SETTINGS.endDate, cycleDays:7, targetCount:3};
+  const g = existing || {id:uid(), name:"", mode:"weekday", weekday:1, intervalWeeks:1, intervalDays:1, startDate:SETTINGS.startDate, endDate:SETTINGS.endDate, dates:[], periodStart:SETTINGS.startDate, periodEnd:SETTINGS.endDate, cycleDays:7, targetCount:3, order:GOALS.length, percentageMode:false, targetPercentage:80};
   const overlay = document.createElement("div");
   overlay.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:150;display:flex;align-items:flex-end;";
   overlay.innerHTML = `
@@ -1018,12 +1058,25 @@ function openGoalEditor(existing){
         </select>
       </div>
       <div id="g_modeFields"></div>
+      <div id="g_percentageWrap" style="${g.mode==="quota"?"display:none;":""}">
+        <label style="display:flex;align-items:center;gap:8px;margin:10px 0;font-size:13px;">
+          <input type="checkbox" id="g_percentageMode" ${g.percentageMode?"checked":""}> Track by percentage instead of a daily streak
+        </label>
+        <div id="g_percentageFields" style="${g.percentageMode?"":"display:none;"}">
+          <label class="field-label" style="display:block;font-size:12px;color:var(--muted);margin-bottom:4px;">Target percentage</label>
+          <input type="number" id="g_targetPercentage" min="1" max="100" value="${g.targetPercentage||80}">
+          <div class="empty-note" style="margin-top:4px;">Missing a day won't break the streak on its own \u2014 as long as your running hit-rate for this goal stays at or above this percentage, it still counts as maintained. If the rate drops below it, that day breaks the streak like normal.</div>
+        </div>
+      </div>
       <div style="display:flex;gap:8px;margin-top:14px;">
         <button class="btn" id="g_cancel" style="flex:1;">Cancel</button>
         <button class="btn-grad" id="g_save" style="flex:1;">Save</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
+  document.getElementById("g_percentageMode").onchange = (e)=>{
+    document.getElementById("g_percentageFields").style.display = e.target.checked ? "" : "none";
+  };
 
   function renderModeFields(){
     const mode = document.getElementById("g_mode").value;
@@ -1070,7 +1123,11 @@ function openGoalEditor(existing){
     }
   }
   renderModeFields();
-  document.getElementById("g_mode").onchange = renderModeFields;
+  document.getElementById("g_mode").onchange = ()=>{
+    renderModeFields();
+    const mode = document.getElementById("g_mode").value;
+    document.getElementById("g_percentageWrap").style.display = mode==="quota" ? "none" : "";
+  };
   document.getElementById("g_cancel").onclick = ()=> overlay.remove();
   document.getElementById("g_save").onclick = async ()=>{
     g.name = document.getElementById("g_name").value.trim() || "Untitled goal";
@@ -1096,6 +1153,8 @@ function openGoalEditor(existing){
         ? Math.max(1, daysBetween(g.periodStart,g.periodEnd)+1)
         : Math.max(1, parseInt(document.getElementById("g_cycleDays").value||1,10));
     }
+    g.percentageMode = g.mode!=="quota" && document.getElementById("g_percentageMode").checked;
+    g.targetPercentage = Math.max(1, Math.min(100, parseInt(document.getElementById("g_targetPercentage").value||80,10)));
     await idbPut("goals", g);
     const idx = GOALS.findIndex(x=>x.id===g.id);
     if(idx>=0) GOALS[idx]=g; else GOALS.push(g);

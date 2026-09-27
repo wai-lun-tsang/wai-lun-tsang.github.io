@@ -57,32 +57,53 @@ LE.renderMarks = async function (container) {
       html += `<div class="le-fab-row"><button class="le-btn secondary small" onclick="LE.openNodeForm('module', null, '${year.id}')"><i class="ti ti-plus"></i> Add full-year module</button></div>`;
     }
 
+    // All assessments belonging to any module in this year, grouped by their home term —
+    // this is what "assessments allocated to that term" draws from, independent of which
+    // module (full-year or per-term) each assessment structurally lives under.
+    const yearModuleIds = new Set(
+      fullYearModules.map(m => m.id).concat(terms.flatMap(t => modules.filter(m => m.parentId === t.id).map(m => m.id)))
+    );
+    const yearAssessments = assessments.filter(a => yearModuleIds.has(a.moduleId));
+    const moduleNameById = {};
+    modules.forEach(m => { moduleNameById[m.id] = m.moduleCode ? `${m.moduleCode} · ${m.name}` : m.name; });
+
     terms.forEach(term => {
       const termModules = modules.filter(m => m.parentId === term.id).sort((a, b) => (a.order || 0) - (b.order || 0));
-      const strictList = termModules.map(m => ({ id: m.id, credit: m.creditValue || 15, assessments: assessmentsByModule[m.id] || [] }));
-      const inclusiveList = strictList.concat(fullYearModules.map(m => ({ id: m.id, credit: m.creditValue || 15, assessments: assessmentsByModule[m.id] || [] })));
-      const tf = LE.termFigures(strictList, inclusiveList, settings);
+      const allocatedAssessments = yearAssessments.filter(a => a.homeTermId === term.id)
+        .sort((a, b) => new Date(a.deadline || 0) - new Date(b.deadline || 0));
+      const taf = LE.termAssessmentFigures(allocatedAssessments, settings);
 
       html += `<div class="le-section" style="padding-top:8px"><p class="le-sub" style="margin-bottom:8px"><strong style="color:var(--text)">${LE.escapeHtml(term.name)}${term.examPeriod ? ' (exam period)' : ''}</strong></p></div>`;
-      html += `<div class="le-marks-cols two">
+      html += `<div class="le-marks-cols">
         <div class="le-stat-card">
-          <h3>Strict (this term only)</h3>
-          <div class="le-stat-row"><span class="label">Completed-only</span><span class="value ${LE.colourClass(tf.strict.completedOnly)}">${LE.fmtPct(tf.strict.completedOnly)}</span></div>
-          <div class="le-stat-row"><span class="label">All assessments</span><span class="value ${LE.colourClass(tf.strict.allAssessments)}">${LE.fmtPct(tf.strict.allAssessments)}</span></div>
-        </div>
-        <div class="le-stat-card">
-          <h3>Inclusive (+ full-year modules)</h3>
-          <div class="le-stat-row"><span class="label">Completed-only</span><span class="value ${LE.colourClass(tf.inclusive.completedOnly)}">${LE.fmtPct(tf.inclusive.completedOnly)}</span></div>
-          <div class="le-stat-row"><span class="label">All assessments</span><span class="value ${LE.colourClass(tf.inclusive.allAssessments)}">${LE.fmtPct(tf.inclusive.allAssessments)}</span></div>
+          <h3>Assessments allocated to this term</h3>
+          <div class="le-stat-row"><span class="label">Average — completed only</span><span class="value ${LE.colourClass(taf.completedOnly)}">${LE.fmtPct(taf.completedOnly)}</span></div>
+          <div class="le-stat-row"><span class="label">Average — all allocated</span><span class="value ${LE.colourClass(taf.allAssessments)}">${LE.fmtPct(taf.allAssessments)}</span></div>
+          ${taf.count === 0 ? `<p class="le-hint">No assessments have this term set as their home term yet.</p>` : ''}
         </div>
       </div>`;
+
+      if (allocatedAssessments.length) {
+        html += `<div class="le-list" style="padding-top:0">`;
+        allocatedAssessments.forEach(a => {
+          const af = LE.assessmentFigures(a, settings);
+          html += `<div class="le-assessment-row">
+            <div class="row1">
+              <span class="name">${LE.escapeHtml(moduleNameById[a.moduleId] || '?')} · ${LE.escapeHtml(a.name)}</span>
+              <span class="value ${LE.colourClass(af.obtainedPct)}">${af.penalizedMark != null ? af.penalizedMark.toFixed(1) : '—'} / ${a.maxMark}</span>
+            </div>
+            <div class="meta">obtained ${LE.fmtPct(af.obtainedPct)}${a.deadline ? ' · due ' + new Date(a.deadline).toLocaleString() : ''}</div>
+          </div>`;
+        });
+        html += `</div>`;
+      }
 
       html += `<div class="le-list" style="padding-top:0">`;
       if (termModules.length === 0 && !term.examPeriod) html += `<p class="le-hint" style="padding:0 0 8px">No modules under this term yet.</p>`;
       termModules.forEach(m => { html += LE.renderModuleBlock(m, assessmentsByModule[m.id] || [], settings); });
       html += `</div>`;
       if (term.examPeriod) {
-        html += `<p class="le-hint" style="padding:0 18px 8px">Exam period — no modules are taught here. Its figures above reflect this year's full-year modules only. Assessments from other terms can still be tagged with this as their home term.</p>`;
+        html += `<p class="le-hint" style="padding:0 18px 8px">Exam period — no modules are taught here. Assessments from other terms can still be tagged with this as their home term.</p>`;
       } else if (yearCreditTotal >= LE.YEAR_CREDIT_CAP) {
         html += `<p class="le-hint" style="padding:0 18px 8px">This year is already at ${yearCreditTotal} of ${LE.YEAR_CREDIT_CAP} credits — no more modules can be added.</p>`;
       } else {
